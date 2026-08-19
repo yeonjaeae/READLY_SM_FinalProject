@@ -1,61 +1,137 @@
 // src/pages/OtherProfile.js
-// 백엔드 연결 시: location.state?.userId 로 userId 받아서
-// useEffect 안에서 GET /api/users/:userId 호출 후 setProfile() 하면 됩니다.
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { apiFetch } from "../api/api";
 
 const heights = [180, 220, 160, 200, 175, 215, 165, 190, 205];
 const colors  = ["#7bc142","#a8d84e","#5aab35","#c5e87a","#68b83e","#b2de5f","#4e9e2f","#d4f09a","#89c94f"];
 
-// ── 임시 더미 데이터 (백엔드 연결 시 삭제) ──────────────────────────
-const DUMMY_USERS = {
-  민지: {
-    name: "민지", img: "/images/민지프로필.png",
-    desc: "함께 책 읽고 이야기하는 걸 좋아해요 📖",
-    followers: 23, following: 15,
-    books: [
-      { title: "노르웨이의 숲", review: "상실 이후에도 사람은 계속 살아간다는 점이 가장 인상 깊었다." },
-      { title: "데미안",       review: "자기 자신을 찾아가는 과정이 정말 인상 깊었다." },
-      { title: "어린왕자",     review: "순수함에 대해 다시 생각하게 만든 책이었다." },
-    ],
-  },
-  현우: {
-    name: "현우", img: "/images/현우프로필.png",
-    desc: "SF랑 철학 좋아합니다 🚀",
-    followers: 31, following: 20,
-    books: [
-      { title: "1984",   review: "감시 사회의 무서움을 현실적으로 보여줬다." },
-      { title: "데미안", review: "성장이란 결국 자신을 마주하는 과정이었다." },
-    ],
-  },
-  서연: {
-    name: "서연", img: "/images/서연프로필.png",
-    desc: "소설과 에세이 사이 어딘가에 있어요 ✨",
-    followers: 18, following: 9,
-    books: [
-      { title: "채식주의자",   review: "강렬하면서도 오래 기억에 남는 작품이었다." },
-      { title: "해변의 카프카", review: "현실과 환상이 섞인 분위기가 좋았다." },
-    ],
-  },
-};
-// ───────────────────────────────────────────────────────────────────
-
 function OtherProfile() {
   const navigate = useNavigate();
   const location = useLocation();
-  const userName = location.state?.user || "민지";
 
-  // 백엔드 연결 시: 아래 줄 대신 useEffect + fetch 로 교체
-  const profile = DUMMY_USERS[userName] || DUMMY_USERS["민지"];
+  // ==================================================
+  // ★ 다른 사람 프로필 (백엔드 연동)
+  //
+  // 기존: DUMMY_USERS 객체에서 이름으로 찾아옴
+  //
+  // 변경: userId로 백엔드에서 조회
+  //
+  // Community.js / MeetingRoom.js 등에서
+  // navigate("/other-profile", { state: { userId: 3 } })
+  // 형태로 userId를 넘겨줘야 함
+  //
+  // 요청: GET /api/users/:userId
+  // 응답: {
+  //   "name": "민지",
+  //   "image": "/images/민지프로필.png",
+  //   "desc": "함께 책 읽고 이야기하는 걸 좋아해요 📖",
+  //   "followers": 23,
+  //   "following": 15,
+  //   "isFollowing": false,
+  //   "books": [
+  //     { "title": "노르웨이의 숲", "review": "..." }
+  //   ]
+  // }
+  // ==================================================
+
+  const userId = location.state?.userId;
+
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+
+    const fetchProfile = async () => {
+      if (!userId) {
+        setError("사용자 정보를 찾을 수 없어요.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError("");
+
+      try {
+        const data = await apiFetch(
+          `/api/users/${userId}`,
+          { method: "GET" }
+        );
+
+        if (!ignore) {
+          setProfile(data);
+          setIsFollowing(!!data.isFollowing);
+          setFollowers(data.followers ?? 0);
+        }
+      } catch (err) {
+        console.error("프로필 조회 오류:", err);
+
+        if (!ignore) {
+          setError("프로필을 불러오지 못했습니다.");
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchProfile();
+
+    return () => {
+      ignore = true;
+    };
+  }, [userId]);
 
   const [isFollowing, setIsFollowing] = useState(false);
-  const [followers,   setFollowers]   = useState(profile.followers);
+  const [followers,   setFollowers]   = useState(0);
+  const [followLoading, setFollowLoading] = useState(false);
 
-  const handleFollow = () => {
-    setIsFollowing(f => !f);
-    setFollowers(n => isFollowing ? n - 1 : n + 1);
-    // 백엔드 연결 시: POST /api/users/:userId/follow 호출
+  // ==================================================
+  // ★ 팔로우 토글 (백엔드 연동)
+  //
+  // 요청: POST /api/users/:userId/follow
+  // 응답: { "isFollowing": true, "followers": 24 }
+  // ==================================================
+
+  const handleFollow = async () => {
+    if (followLoading || !userId) {
+      return;
+    }
+
+    setFollowLoading(true);
+
+    // 우선 화면은 즉시 반응하게 낙관적으로 바꿔둠
+    const nextFollowing = !isFollowing;
+    setIsFollowing(nextFollowing);
+    setFollowers((n) => (nextFollowing ? n + 1 : n - 1));
+
+    try {
+      const data = await apiFetch(
+        `/api/users/${userId}/follow`,
+        { method: "POST" }
+      );
+
+      // 서버가 정확한 값을 내려주면 그걸로 덮어씀
+      if (typeof data?.isFollowing === "boolean") {
+        setIsFollowing(data.isFollowing);
+      }
+
+      if (typeof data?.followers === "number") {
+        setFollowers(data.followers);
+      }
+    } catch (err) {
+      console.error("팔로우 요청 오류:", err);
+
+      // 실패하면 낙관적으로 바꿨던 걸 되돌림
+      setIsFollowing((prev) => !prev);
+      setFollowers((n) => (nextFollowing ? n - 1 : n + 1));
+    } finally {
+      setFollowLoading(false);
+    }
   };
 
   // 드래그 슬라이드 — Profile.js와 동일
@@ -149,6 +225,9 @@ function OtherProfile() {
         }
         .follow-action-btn.on {
           background: #f0f0f0; color: #666;
+        }
+        .follow-action-btn:disabled {
+          opacity: 0.6; cursor: default;
         }
 
         /* 책장 영역 */
@@ -247,82 +326,101 @@ function OtherProfile() {
           <div style={{ width: 24 }} />
         </div>
 
-        {/* 프로필 — Profile.js .profile-top과 동일 구조 */}
-        <div className="profile-top">
-          <div className="profile-image">
-            <img
-              src={profile.img}
-              alt="프로필"
-              style={{ width:"100%", height:"100%", objectFit:"cover" }}
-              onError={e => { e.target.style.display = "none"; }}
-            />
+        {/* 로딩 / 에러 */}
+
+        {loading && (
+          <div style={{ padding: "20px", fontSize: "13px", color: "#888" }}>
+            불러오는 중...
           </div>
-          <div className="profile-info">
-            <div className="profile-name">{profile.name}</div>
-            <div className="follow-wrap">
-              <div className="follow-box">
-                <div className="follow-num">{followers}</div>
-                <div className="follow-text">팔로워</div>
+        )}
+
+        {error && (
+          <div style={{ padding: "20px", fontSize: "13px", color: "#e57373" }}>
+            {error}
+          </div>
+        )}
+
+        {!loading && profile && (
+          <>
+            {/* 프로필 — Profile.js .profile-top과 동일 구조 */}
+            <div className="profile-top">
+              <div className="profile-image">
+                <img
+                  src={profile.image}
+                  alt="프로필"
+                  style={{ width:"100%", height:"100%", objectFit:"cover" }}
+                  onError={e => { e.target.style.display = "none"; }}
+                />
               </div>
-              <div className="follow-box">
-                <div className="follow-num">{profile.following}</div>
-                <div className="follow-text">팔로잉</div>
-              </div>
-            </div>
-            <div className="follow-btn-wrap">
-              <button
-                className={`follow-action-btn ${isFollowing ? "on" : "off"}`}
-                onClick={handleFollow}
-              >
-                {isFollowing ? "팔로잉 ✓" : "팔로우"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* 소개 */}
-        <div className="profile-desc">{profile.desc}</div>
-        <div className="divider" />
-
-        {/* 책장 */}
-        <div className="bookshelf-area">
-          <div className="lamp-wrap">
-            <div className="lamp-rod" />
-            <div className="lamp-head">
-              <div className="lamp-glow" />
-            </div>
-          </div>
-
-          <div
-            ref={shelfRef}
-            className="book-scroll"
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
-          >
-            {profile.books.map((book, index) => (
-              <div
-                key={index}
-                className="book-item"
-                onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
-              >
-                <div
-                  className="book-spine"
-                  style={{
-                    width: "48px",
-                    height: `${heights[index % heights.length]}px`,
-                    background: colors[index % colors.length],
-                  }}
-                >
-                  {book.title}
+              <div className="profile-info">
+                <div className="profile-name">{profile.name}</div>
+                <div className="follow-wrap">
+                  <div className="follow-box">
+                    <div className="follow-num">{followers}</div>
+                    <div className="follow-text">팔로워</div>
+                  </div>
+                  <div className="follow-box">
+                    <div className="follow-num">{profile.following}</div>
+                    <div className="follow-text">팔로잉</div>
+                  </div>
+                </div>
+                <div className="follow-btn-wrap">
+                  <button
+                    className={`follow-action-btn ${isFollowing ? "on" : "off"}`}
+                    onClick={handleFollow}
+                    disabled={followLoading}
+                  >
+                    {isFollowing ? "팔로잉 ✓" : "팔로우"}
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
 
-          <div className="shelf-board" />
-        </div>
+            {/* 소개 */}
+            <div className="profile-desc">{profile.desc}</div>
+            <div className="divider" />
+
+            {/* 책장 */}
+            <div className="bookshelf-area">
+              <div className="lamp-wrap">
+                <div className="lamp-rod" />
+                <div className="lamp-head">
+                  <div className="lamp-glow" />
+                </div>
+              </div>
+
+              <div
+                ref={shelfRef}
+                className="book-scroll"
+                onMouseDown={onMouseDown}
+                onMouseMove={onMouseMove}
+                onMouseUp={onMouseUp}
+                onMouseLeave={onMouseUp}
+              >
+                {(profile.books || []).map((book, index) => (
+                  <div
+                    key={index}
+                    className="book-item"
+                    onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
+                  >
+                    <div
+                      className="book-spine"
+                      style={{
+                        width: "48px",
+                        height: `${heights[index % heights.length]}px`,
+                        background: colors[index % colors.length],
+                      }}
+                    >
+                      {book.title}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="shelf-board" />
+            </div>
+          </>
+        )}
 
       </div>
     </>

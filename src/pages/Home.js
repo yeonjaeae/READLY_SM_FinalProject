@@ -1,5 +1,7 @@
 // src/pages/Home.js
 
+import { useState, useEffect } from "react";
+
 import {
   FiBell,
   FiSearch,
@@ -15,25 +17,109 @@ import { Autoplay } from "swiper/modules";
 
 import "swiper/css";
 
-const books = [
-  {
-    title: "노르웨이의 숲",
-    image:
-      "/images/노르웨이의숲.jpeg",
-  },
-  {
-    title: "데미안",
-    image:
-      "/images/데미안.jpeg",
-  },
-  {
-    title: "어린왕자",
-    image:
-      "/images/어린왕자.jpeg",
-  },
-];
+import { apiFetch } from "../api/api";
 
 function Home() {
+  // ==================================================
+  // ★ 인기 책 / 활동중인 모임
+  //
+  // 기존: 하드코딩된 books 배열 + group-card 3개 고정
+  //
+  // 변경: 백엔드에서 받아옴
+  //
+  // 요청: GET /api/home
+  // 응답:
+  // {
+  //   "popularBooks": [
+  //     { "title": "노르웨이의 숲", "image": "/images/노르웨이의숲.jpeg" }
+  //   ],
+  //   "activeGroups": [
+  //     {
+  //       "id": 1,
+  //       "title": "<프로젝트 헤밍웨이>",
+  //       "timeRange": "12:00 ~ 01:00",
+  //       "status": "모임중",
+  //       "mood": "badge1",
+  //       "date": "2026.05.30",
+  //       "currentMembers": 5,
+  //       "maxMembers": 10
+  //     }
+  //   ]
+  // }
+  // ==================================================
+
+  const [popularBooks, setPopularBooks] =
+    useState([]);
+
+  const [activeGroups, setActiveGroups] =
+    useState([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  useEffect(() => {
+    let ignore = false;
+
+    const fetchHome = async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const data = await apiFetch(
+          "/api/home",
+          { method: "GET" }
+        );
+
+        if (!ignore) {
+          setPopularBooks(
+            data.popularBooks || []
+          );
+
+          setActiveGroups(
+            data.activeGroups || []
+          );
+        }
+      } catch (err) {
+        console.error(
+          "홈 데이터 불러오기 오류:",
+          err
+        );
+
+        if (!ignore) {
+          setError(
+            "데이터를 불러오지 못했습니다."
+          );
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchHome();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const moodLabel = (mood) => {
+    if (mood === "badge1")
+      return "깊게 토론해요";
+
+    if (mood === "badge2")
+      return "부담없이 참여해요";
+
+    if (mood === "badge3")
+      return "함께 이야기해요";
+
+    return "";
+  };
+
   return (
     <div className="page">
       {/* 상단 */}
@@ -53,133 +139,124 @@ function Home() {
         </div>
       </div>
 
+      {/* 로딩 / 에러 */}
+
+      {loading && (
+        <div
+          style={{
+            padding: "20px",
+            fontSize: "13px",
+            color: "#888",
+          }}
+        >
+          불러오는 중...
+        </div>
+      )}
+
+      {error && (
+        <div
+          style={{
+            padding: "20px",
+            fontSize: "13px",
+            color: "#e57373",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       {/* 슬라이드 */}
-      <Swiper
-        modules={[Autoplay]}
-        autoplay={{
-          delay: 2500,
-          disableOnInteraction: false,
-        }}
-        loop={true}
-        spaceBetween={14}
-        slidesPerView={1}
-        className="book-swiper"
-      >
-        {books.map((book, index) => (
-          <SwiperSlide key={index}>
-            <div className="hero-card">
-              <img
-                src={book.image}
-                alt={book.title}
-                className="hero-image"
-              />
 
-              <div className="hero-title">
-                {book.title}
-              </div>
+      {!loading &&
+        popularBooks.length > 0 && (
+          <Swiper
+            modules={[Autoplay]}
+            autoplay={{
+              delay: 2500,
+              disableOnInteraction: false,
+            }}
+            loop={true}
+            spaceBetween={14}
+            slidesPerView={1}
+            className="book-swiper"
+          >
+            {popularBooks.map(
+              (book, index) => (
+                <SwiperSlide
+                  key={index}
+                >
+                  <div className="hero-card">
+                    <img
+                      src={book.image}
+                      alt={book.title}
+                      className="hero-image"
+                    />
 
-              <div className="hero-sub">
-                지금 가장 인기있는 책이에요
-              </div>
-            </div>
-          </SwiperSlide>
-        ))}
-      </Swiper>
+                    <div className="hero-title">
+                      {book.title}
+                    </div>
+
+                    <div className="hero-sub">
+                      지금 가장 인기있는 책이에요
+                    </div>
+                  </div>
+                </SwiperSlide>
+              )
+            )}
+          </Swiper>
+        )}
 
       {/* 모임 카드 */}
 
-      <div className="group-card">
-        <div className="group-header">
-          <div>
-            <div className="group-title">
-              &lt;프로젝트 헤밍웨이&gt;
+      {!loading &&
+        activeGroups.map((group) => (
+          <div
+            className="group-card"
+            key={group.id}
+          >
+            <div className="group-header">
+              <div>
+                <div className="group-title">
+                  {group.title}
+                </div>
+
+                <div className="group-info">
+                  {group.timeRange}
+                </div>
+              </div>
+
+              <div className="badge-wrap">
+                <div className="badge">
+                  {group.status}
+                </div>
+
+                <div
+                  className={
+                    group.mood
+                  }
+                >
+                  {moodLabel(
+                    group.mood
+                  )}
+                </div>
+              </div>
             </div>
 
-            <div className="group-info">
-              12:00 ~ 01:00
-            </div>
-          </div>
+            <div className="line"></div>
 
-          <div className="badge-wrap">
-            <div className="badge">
-              모임중
-            </div>
+            <div className="group-footer">
+              <span>
+                {group.date}
+              </span>
 
-            <div className="badge1">
-              깊게 토론해요
-            </div>
-          </div>
-        </div>
-
-        <div className="line"></div>
-
-        <div className="group-footer">
-          <span>2026.05.30</span>
-          <span>5/10명</span>
-        </div>
-      </div>
-
-      <div className="group-card">
-        <div className="group-header">
-          <div>
-            <div className="group-title">
-              &lt;노르웨이의 숲 함께 읽어요!&gt;
-            </div>
-
-            <div className="group-info">
-              19:00 ~ 20:30
-            </div>
-          </div>
-
-          <div className="badge-wrap">
-            <div className="badge">
-              모임중
-            </div>
-
-            <div className="badge3">
-              함께 이야기해요
+              <span>
+                {group.currentMembers}
+                /
+                {group.maxMembers}명
+              </span>
             </div>
           </div>
-        </div>
-
-        <div className="line"></div>
-
-        <div className="group-footer">
-          <span>2026.03.12</span>
-          <span>3/8명</span>
-        </div>
-      </div>
-
-      <div className="group-card">
-        <div className="group-header">
-          <div>
-            <div className="group-title">
-              &lt;데미안 독서모임&gt;
-            </div>
-
-            <div className="group-info">
-              18:00 ~ 19:30
-            </div>
-          </div>
-
-          <div className="badge-wrap">
-            <div className="badge">
-              모임중
-            </div>
-
-            <div className="badge2">
-              부담없이 참여해요
-            </div>
-          </div>
-        </div>
-
-        <div className="line"></div>
-
-        <div className="group-footer">
-          <span>2026.04.01</span>
-          <span>2/6명</span>
-        </div>
-      </div>
+        ))}
     </div>
   );
 }

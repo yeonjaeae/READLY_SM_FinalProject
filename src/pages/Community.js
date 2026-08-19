@@ -1,7 +1,8 @@
 // src/pages/Community.js
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { apiFetch } from "../api/api";
 
 function Community() {
   const navigate = useNavigate();
@@ -9,41 +10,60 @@ function Community() {
   // ==================================================
   // 모임 목록
   //
-  // ★ isHost 필드 제거
-  // (방장 여부는 이제 백엔드가 role로 내려줌)
+  // ★ 백엔드에서 조회 (백엔드 연동)
+  //
+  // 요청: GET /api/rooms
+  // 응답: [
+  //   {
+  //     "id": 1,
+  //     "title": "상실과 성장에 대하여",
+  //     "book": "노르웨이의 숲",
+  //     "time": "오늘 19:00",
+  //     "members": "4 / 6명",
+  //     "status": "모임중",
+  //     "mood": "badge1"
+  //   },
+  //   ...
+  // ]
   // ==================================================
 
-  const [meetings, setMeetings] = useState([
-    {
-      id: 1,
-      title: "상실과 성장에 대하여",
-      book: "노르웨이의 숲",
-      time: "오늘 19:00",
-      members: "4 / 6명",
-      status: "모임중",
-      mood: "badge1",
-    },
+  const [meetings, setMeetings] =
+    useState([]);
 
-    {
-      id: 2,
-      title: "나를 찾아가는 시간",
-      book: "데미안",
-      time: "오늘 20:00",
-      members: "3 / 6명",
-      status: "모집중",
-      mood: "badge2",
-    },
+  const [listLoading, setListLoading] =
+    useState(true);
 
-    {
-      id: 3,
-      title: "작지만 소중한 것들",
-      book: "어린왕자",
-      time: "내일 18:00",
-      members: "5 / 6명",
-      status: "모집중",
-      mood: "badge3",
-    },
-  ]);
+  const [listError, setListError] =
+    useState("");
+
+  const fetchMeetings = async () => {
+    setListLoading(true);
+    setListError("");
+
+    try {
+      const data = await apiFetch(
+        "/api/rooms",
+        { method: "GET" }
+      );
+
+      setMeetings(data || []);
+    } catch (err) {
+      console.error(
+        "모임 목록 조회 오류:",
+        err
+      );
+
+      setListError(
+        "모임 목록을 불러오지 못했습니다."
+      );
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMeetings();
+  }, []);
 
   // ==================================================
   // 모임 생성 모달
@@ -74,7 +94,23 @@ function Community() {
     });
 
   // ==================================================
+  // ★ 모임 생성 요청 중 상태
+  // ==================================================
+
+  const [
+    createLoading,
+    setCreateLoading,
+  ] = useState(false);
+
+  const [createError, setCreateError] =
+    useState("");
+
+  // ==================================================
   // 책 데이터
+  //
+  // ★ 책 검색은 지금 로컬 배열 기준
+  // 나중에 실제 도서 검색 API로 교체 가능
+  // (예: GET /api/books?query=검색어)
   // ==================================================
 
   const books = [
@@ -120,16 +156,24 @@ function Community() {
         );
 
   // ==================================================
-  // 모임 생성
+  // 모임 생성 (백엔드 연동)
   //
-  // ★ isHost 설정 코드 제거
+  // 요청: POST /api/rooms
+  // {
+  //   "title": "모임 이름",
+  //   "bookTitle": "노르웨이의 숲",
+  //   "date": "2026-05-30",
+  //   "time": "19:00",
+  //   "maxPeople": 6,
+  //   "mood": "badge1"
+  // }
   //
-  // 방 생성 API 호출 시, 로그인한 사용자를
-  // 백엔드가 자동으로 hostId로 저장하므로
-  // 프론트에서는 신경 쓸 필요 없음
+  // 응답: 생성된 모임 객체 (meetings 배열과 같은 형태)
+  //
+  // → 로그인한 사용자를 백엔드가 자동으로 hostId로 저장
   // ==================================================
 
-  const addMeeting = () => {
+  const addMeeting = async () => {
     if (
       !newMeeting.meetingName ||
       !newMeeting.selectedBook
@@ -141,68 +185,77 @@ function Community() {
       return;
     }
 
-    const newRoom = {
-      id: Date.now(),
+    if (createLoading) {
+      return;
+    }
 
-      title:
-        newMeeting.meetingName,
+    setCreateLoading(true);
+    setCreateError("");
 
-      book:
-        newMeeting.selectedBook.title,
+    try {
+      const created = await apiFetch(
+        "/api/rooms",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title:
+              newMeeting.meetingName,
 
-      time:
-        `${newMeeting.date} ${newMeeting.time}`,
+            bookTitle:
+              newMeeting.selectedBook
+                .title,
 
-      members:
-        `1 / ${newMeeting.people}명`,
+            date: newMeeting.date,
 
-      status: "모집중",
+            time: newMeeting.time,
 
-      mood:
-        newMeeting.mood,
+            maxPeople:
+              newMeeting.people,
+
+            mood: newMeeting.mood,
+          }),
+        }
+      );
 
       // ------------------------------------------
-      // ★ 나중에 백엔드 연결 시
-      //
-      // const response = await fetch(
-      //   "http://localhost:8080/api/rooms",
-      //   {
-      //     method: "POST",
-      //     headers: { "Content-Type": "application/json" },
-      //     body: JSON.stringify({
-      //       title: newMeeting.meetingName,
-      //       bookTitle: newMeeting.selectedBook.title,
-      //       date: newMeeting.date,
-      //       time: newMeeting.time,
-      //       maxPeople: newMeeting.people,
-      //       mood: newMeeting.mood,
-      //     }),
-      //   }
-      // );
-      //
-      // → 이 요청을 보낸 로그인 사용자를
-      //   백엔드가 hostId로 저장
+      // 서버가 만들어준 최신 목록을 다시 받아오는 게
+      // 제일 정확하지만, 응답으로 생성된 방 정보를
+      // 바로 주면 그걸 목록에 추가해서 즉시 반영
       // ------------------------------------------
 
-    };
+      if (created) {
+        setMeetings((prev) => [
+          ...prev,
+          created,
+        ]);
+      } else {
+        await fetchMeetings();
+      }
 
-    setMeetings((prev) => [
-      ...prev,
-      newRoom,
-    ]);
+      setShowModal(false);
+      setSearch("");
 
-    setShowModal(false);
+      setNewMeeting({
+        meetingName: "",
+        selectedBook: null,
+        date: "",
+        time: "",
+        people: 6,
+        mood: "badge1",
+      });
+    } catch (err) {
+      console.error(
+        "모임 생성 오류:",
+        err
+      );
 
-    setSearch("");
-
-    setNewMeeting({
-      meetingName: "",
-      selectedBook: null,
-      date: "",
-      time: "",
-      people: 6,
-      mood: "badge1",
-    });
+      setCreateError(
+        err.message ||
+          "모임 생성 중 오류가 발생했습니다."
+      );
+    } finally {
+      setCreateLoading(false);
+    }
   };
 
   // ==================================================
@@ -243,12 +296,39 @@ function Community() {
         참여 가능해요
       </div>
 
+      {/* 목록 로딩 / 에러 */}
+
+      {listLoading && (
+        <div
+          style={{
+            padding: "20px",
+            fontSize: "13px",
+            color: "#888",
+          }}
+        >
+          모임 목록을 불러오는 중...
+        </div>
+      )}
+
+      {listError && (
+        <div
+          style={{
+            padding: "20px",
+            fontSize: "13px",
+            color: "#e57373",
+          }}
+        >
+          {listError}
+        </div>
+      )}
+
 
       {/* ==================================================
           모임 카드
       ================================================== */}
 
-      {meetings.map((meeting) => (
+      {!listLoading &&
+        meetings.map((meeting) => (
 
         <div
           className="group-card"
@@ -335,8 +415,6 @@ function Community() {
               onClick={() => {
 
                 // ==================================================
-                // ★ 이제 isHost를 프론트에서 안 넘김
-                //
                 // roomId만 넘기고,
                 // MeetingRoom에서 roomId로
                 // 방 입장 API를 호출해서
@@ -646,6 +724,22 @@ function Community() {
 
             </select>
 
+            {/* ------------------------------------------
+                생성 에러
+            ------------------------------------------ */}
+
+            {createError && (
+              <div
+                style={{
+                  marginTop: "10px",
+                  color: "#e57373",
+                  fontSize: "13px",
+                }}
+              >
+                {createError}
+              </div>
+            )}
+
 
             {/* ------------------------------------------
                 버튼
@@ -666,8 +760,13 @@ function Community() {
               <button
                 className="create-btn"
                 onClick={addMeeting}
+                disabled={
+                  createLoading
+                }
               >
-                만들기
+                {createLoading
+                  ? "만드는 중..."
+                  : "만들기"}
               </button>
 
             </div>

@@ -1,75 +1,143 @@
 // src/api/api.js
 
 // ==================================================
-// 백엔드 기본 주소
-// ==================================================
+// ★ 백엔드 주소
 //
-// 나중에 백엔드 조원이 알려주는 주소로 변경
-//
-// 예:
-// http://localhost:8080
-// http://localhost:8080/api
-//
-// 현재는 React와 같은 서버를 사용하는 형태로 작성
+// 백엔드 팀원이 실제 배포/로컬 주소 알려주면
+// 여기 한 곳만 바꾸면 전체 앱에 적용됨
 // ==================================================
 
-const API_BASE_URL = "";
+export const API_BASE_URL =
+  "http://localhost:8080";
 
+// ==================================================
+// ★ 로그인 토큰 저장/조회
+//
+// 로그인 성공 시 setToken()으로 저장해두면
+// 이후 모든 apiFetch 호출에 자동으로 붙음
+// ==================================================
 
-/**
- * AI 독후감 생성 요청
- *
- * 프론트에서 보내는 데이터
- *
- * {
- *   book: {
- *     title,
- *     author
- *   },
- *
- *   ocrText: "사진에서 추출된 책 구절",
- *
- *   quote: "사용자가 직접 작성한 인상 깊은 구절",
- *
- *   reflection: "사용자가 작성한 느낀점"
- * }
- *
- * 백엔드에서는 이 데이터를 받아
- * AI를 이용해 독후감을 생성하고
- * DB에 저장할 예정
- */
-export async function createReview(reviewData) {
+const TOKEN_KEY = "readlyToken";
+
+export function getToken() {
+  return localStorage.getItem(
+    TOKEN_KEY
+  );
+}
+
+export function setToken(token) {
+  localStorage.setItem(
+    TOKEN_KEY,
+    token
+  );
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// ==================================================
+// ★ 공통 fetch 래퍼
+//
+// - API_BASE_URL 자동으로 붙여줌
+// - Content-Type 자동 설정
+// - 로그인 토큰이 있으면 Authorization 헤더 자동 첨부
+// - 실패 시 백엔드가 보내주는 에러 메시지를 최대한 살려서 throw
+//
+// 사용 예시:
+// const data = await apiFetch("/api/rooms", { method: "GET" });
+// ==================================================
+
+export async function apiFetch(
+  path,
+  options = {}
+) {
+  const token = getToken();
+
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers["Authorization"] =
+      `Bearer ${token}`;
+  }
 
   const response = await fetch(
-    `${API_BASE_URL}/api/reviews/generate`,
+    `${API_BASE_URL}${path}`,
     {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
-      },
-
-      body: JSON.stringify(reviewData),
+      ...options,
+      headers,
     }
   );
 
+  // ------------------------------------------
+  // 응답 body가 없거나 JSON이 아닐 수도 있으니
+  // 안전하게 파싱 시도
+  // ------------------------------------------
 
-  // 백엔드에서 에러가 발생한 경우
+  let data = null;
 
-  if (!response.ok) {
-
-    throw new Error(
-      `독후감 생성 요청 실패: ${response.status}`
-    );
-
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    data = null;
   }
 
+  if (!response.ok) {
+    const message =
+      data?.message ||
+      "요청 처리 중 오류가 발생했습니다.";
 
-  // 백엔드 응답
-
-  const data =
-    await response.json();
-
+    throw new Error(message);
+  }
 
   return data;
+}
+
+// ==================================================
+// ★ 인증 관련 API
+// ==================================================
+
+// 요청: { email, password }
+// 응답: { token: "...", user: { id, name, email } }
+export function login(
+  email,
+  password
+) {
+  return apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email,
+      password,
+    }),
+  });
+}
+
+// 요청: { name, email, password }
+// 응답: { success: true }
+export function signup(
+  name,
+  email,
+  password
+) {
+  return apiFetch(
+    "/api/auth/signup",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+      }),
+    }
+  );
+}
+
+export function logout() {
+  clearToken();
+  localStorage.removeItem(
+    "currentUser"
+  );
 }

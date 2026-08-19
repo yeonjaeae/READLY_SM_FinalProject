@@ -20,6 +20,8 @@ import Tesseract from "tesseract.js";
 
 // ==================================================
 // ★ 백엔드 주소
+//
+// 백엔드 팀원이 실제 배포/로컬 주소 알려주면 교체
 // ==================================================
 
 const API_BASE_URL =
@@ -233,14 +235,19 @@ function AIWrite() {
   };
 
   // =========================
-  // ★ 오타 교정 요청
+  // ★ 오타 교정 요청 (백엔드 연동)
   //
   // Tesseract가 뽑은 원본 텍스트를
   // 백엔드로 보내서, LLM이 문맥에 맞게
   // 자연스러운 문장으로 교정해서 돌려줌
   //
-  // 백엔드 응답 예시
-  // { "correctedText": "교정된 문장" }
+  // 요청: { "rawText": "OCR 원본 텍스트" }
+  // 응답: { "correctedText": "교정된 문장" }
+  //
+  // ★ 백엔드가 아직 없어도 에러 시 원본 텍스트로
+  // 자동 폴백되니 지금 당장 화면이 깨지진 않음
+  // (백엔드 엔드포인트가 만들어지는 순간
+  // 이 코드 수정 없이 바로 연동됨)
   // =========================
 
   const correctOcrText = async (
@@ -254,28 +261,19 @@ function AIWrite() {
     setCorrectError("");
 
     try {
-      // ==================================================
-      // ★ 실제 백엔드 연결 시 사용할 코드
-      //
-      // 백엔드가 LLM에 아래처럼 프롬프트를 구성해서 호출
-      //
-      // "다음은 책 사진을 OCR로 추출한 텍스트인데,
-      //  글자 인식 오류가 섞여 있을 수 있습니다.
-      //  문맥에 맞게 자연스러운 문장으로 교정해서
-      //  교정된 문장만 출력해주세요:
-      //
-      //  {rawText}"
-      // ==================================================
-
-      /*
       const response = await fetch(
         `${API_BASE_URL}/api/ocr/correct`,
         {
           method: "POST",
+
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
-          body: JSON.stringify({ rawText }),
+
+          body: JSON.stringify({
+            rawText,
+          }),
         }
       );
 
@@ -285,19 +283,12 @@ function AIWrite() {
         );
       }
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
-      return data.correctedText || rawText;
-      */
-
-      // ==================================================
-      // 현재는 백엔드 연결 전 - 프론트 테스트용
-      //
-      // ★ 나중에 위 fetch 블록의 주석만 풀고
-      // 이 아래 한 줄만 지우면 됨
-      // ==================================================
-
-      return rawText;
+      return (
+        data.correctedText || rawText
+      );
     } catch (error) {
       console.error(
         "오타 교정 오류:",
@@ -422,7 +413,10 @@ function AIWrite() {
   };
 
   // =========================
-  // AI 독후감 생성 요청
+  // AI 독후감 생성 요청 (백엔드 연동)
+  //
+  // 요청: { bookTitle, bookAuthor, quote, feeling }
+  // 응답: { "review": "생성된 독후감" }
   // =========================
 
   const handleGenerate = async () => {

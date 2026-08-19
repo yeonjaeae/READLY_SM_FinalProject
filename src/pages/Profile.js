@@ -1,39 +1,84 @@
 // src/pages/Profile.js
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FiSettings } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
-
-const initialBooks = [
-  { title: "노르웨이의 숲", review: "상실 이후에도 사람은 계속 살아간다는 점이 가장 인상 깊었다." },
-  { title: "데미안", review: "자기 자신을 찾아가는 과정이 정말 인상 깊었다." },
-  { title: "어린왕자", review: "어른이 된다는 건 무엇일까 다시 생각하게 만든 책이었다." },
-  { title: "1984", review: "감시 사회의 무서움을 현실적으로 보여줘서 몰입감이 강했다." },
-  { title: "해변의 카프카", review: "현실과 환상이 섞이는 분위기가 매력적이었다." },
-  { title: "채식주의자", review: "인물의 심리 변화가 굉장히 강렬했다." },
-  { title: "82년생 김지영", review: "평범한 일상 속 차별이 얼마나 깊은지 느꼈다." },
-  { title: "파친코", review: "세대를 넘는 이야기가 깊은 여운을 남겼다." },
-  { title: "아몬드", review: "감정을 느끼지 못하는 주인공이 오히려 많은 감정을 불러일으켰다." },
-];
+import { apiFetch } from "../api/api";
 
 const heights = [180, 220, 160, 200, 175, 215, 165, 190, 205];
 const colors = ["#7bc142", "#a8d84e", "#5aab35", "#c5e87a", "#68b83e", "#b2de5f", "#4e9e2f", "#d4f09a", "#89c94f"];
 
 function Profile() {
   const navigate = useNavigate();
-  const currentUser = JSON.parse(localStorage.getItem("currentUser"));
 
-  // 프로필 상태
-  const [userName, setUserName] = useState(currentUser?.name || "김수연");
-  const [profileDesc, setProfileDesc] = useState("에세이를 좋아하는 책린이 입니다!\ninstagram: xx_123");
-  const [profileImg, setProfileImg] = useState("/images/프로필사진.png");
+  // ==================================================
+  // ★ 내 프로필 (백엔드 연동)
+  //
+  // 기존: localStorage의 currentUser + 하드코딩된
+  //      initialBooks 9권 + 팔로워/팔로잉 100 고정
+  //
+  // 변경: 백엔드에서 조회
+  //
+  // 요청: GET /api/users/me
+  // 응답: {
+  //   "name": "김수연",
+  //   "desc": "에세이를 좋아하는 책린이 입니다!",
+  //   "image": "/images/프로필사진.png",
+  //   "followers": 12,
+  //   "following": 8,
+  //   "books": [
+  //     { "title": "노르웨이의 숲", "review": "..." }
+  //   ]
+  // }
+  // ==================================================
+
+  const [profile, setProfile] =
+    useState(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  const fetchProfile = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await apiFetch(
+        "/api/users/me",
+        { method: "GET" }
+      );
+
+      setProfile(data);
+    } catch (err) {
+      console.error(
+        "프로필 조회 오류:",
+        err
+      );
+
+      setError(
+        "프로필을 불러오지 못했습니다."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchProfile();
+  }, []);
 
   // 모달 상태
   const [showModal, setShowModal] = useState(false);
-  const [editName, setEditName] = useState(userName);
-  const [editDesc, setEditDesc] = useState(profileDesc);
-  const [editImgPreview, setEditImgPreview] = useState(profileImg);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editImgPreview, setEditImgPreview] = useState("");
   const [editImgFile, setEditImgFile] = useState(null);
+
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const fileInputRef = useRef(null);
 
@@ -71,23 +116,95 @@ function Profile() {
     reader.readAsDataURL(file);
   };
 
-  // 저장
-  const handleSave = () => {
-    setUserName(editName);
-    setProfileDesc(editDesc);
-    setProfileImg(editImgPreview);
-    // localStorage 업데이트
-    const user = JSON.parse(localStorage.getItem("currentUser")) || {};
-    localStorage.setItem("currentUser", JSON.stringify({ ...user, name: editName }));
-    setShowModal(false);
+  // ==================================================
+  // ★ 저장 (백엔드 연동)
+  //
+  // 요청: PATCH /api/users/me
+  // {
+  //   "name": "...",
+  //   "desc": "...",
+  //   "image": "data:image/png;base64,..." (수정한 경우만)
+  // }
+  //
+  // 응답: 수정된 프로필 객체 (GET과 같은 형태)
+  //
+  // ※ 이미지가 커지면 base64 대신 별도
+  // multipart/form-data 업로드 API로 분리하는 게 나을 수 있음
+  // ==================================================
+
+  const handleSave = async () => {
+    if (saveLoading) {
+      return;
+    }
+
+    setSaveLoading(true);
+    setSaveError("");
+
+    try {
+      const requestBody = {
+        name: editName,
+        desc: editDesc,
+      };
+
+      // 이미지를 새로 선택한 경우에만 같이 보냄
+      if (editImgFile) {
+        requestBody.image =
+          editImgPreview;
+      }
+
+      const updated = await apiFetch(
+        "/api/users/me",
+        {
+          method: "PATCH",
+          body: JSON.stringify(
+            requestBody
+          ),
+        }
+      );
+
+      setProfile(updated);
+
+      // 다른 페이지에서 쓰는 currentUser도 같이 갱신
+      const currentUser =
+        JSON.parse(
+          localStorage.getItem(
+            "currentUser"
+          )
+        ) || {};
+
+      localStorage.setItem(
+        "currentUser",
+        JSON.stringify({
+          ...currentUser,
+          name: updated.name,
+        })
+      );
+
+      setShowModal(false);
+    } catch (err) {
+      console.error(
+        "프로필 저장 오류:",
+        err
+      );
+
+      setSaveError(
+        err.message ||
+          "프로필 저장 중 오류가 발생했습니다."
+      );
+    } finally {
+      setSaveLoading(false);
+    }
   };
 
   // 모달 열기
   const openModal = () => {
-    setEditName(userName);
-    setEditDesc(profileDesc);
-    setEditImgPreview(profileImg);
+    setEditName(profile?.name || "");
+    setEditDesc(profile?.desc || "");
+    setEditImgPreview(
+      profile?.image || ""
+    );
     setEditImgFile(null);
+    setSaveError("");
     setShowModal(true);
   };
 
@@ -325,6 +442,7 @@ function Profile() {
           transition: opacity 0.15s;
         }
         .btn-save:hover { opacity: 0.88; }
+        .btn-save:disabled { opacity: 0.6; cursor: default; }
       `}</style>
 
       <div className="profile-page">
@@ -335,77 +453,95 @@ function Profile() {
           <FiSettings className="setting-icon" />
         </div>
 
-        {/* 프로필 */}
-        <div className="profile-top">
-          <div className="profile-image">
-            <img src={profileImg} alt="프로필" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        {/* 로딩 / 에러 */}
+
+        {loading && (
+          <div style={{ padding: "20px", fontSize: "13px", color: "#888" }}>
+            불러오는 중...
           </div>
-          <div className="profile-info">
-            <div className="profile-name">
-              {userName}
-              <button className="pencil-btn" onClick={openModal} aria-label="프로필 수정">✏️</button>
-            </div>
-            <div className="follow-wrap">
-              <div className="follow-box">
-                <div className="follow-num">100</div>
-                <div className="follow-text">팔로워</div>
+        )}
+
+        {error && (
+          <div style={{ padding: "20px", fontSize: "13px", color: "#e57373" }}>
+            {error}
+          </div>
+        )}
+
+        {!loading && profile && (
+          <>
+            {/* 프로필 */}
+            <div className="profile-top">
+              <div className="profile-image">
+                <img src={profile.image} alt="프로필" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               </div>
-              <div className="follow-box">
-                <div className="follow-num">100</div>
-                <div className="follow-text">팔로잉</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 소개 */}
-        <div className="profile-desc">{profileDesc}</div>
-
-        <div className="divider" />
-
-        {/* 책장 */}
-        <div className="bookshelf-area">
-
-          {/* 조명 */}
-          <div className="lamp-wrap">
-            <div className="lamp-rod" />
-            <div className="lamp-head">
-              <div className="lamp-glow" />
-            </div>
-          </div>
-
-          {/* 책 스크롤 */}
-          <div
-            ref={shelfRef}
-            className="book-scroll"
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
-          >
-            {initialBooks.map((book, index) => {
-              const h = heights[index % heights.length];
-              const bg = colors[index % colors.length];
-              return (
-                <div
-                  key={index}
-                  className="book-item"
-                  onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
-                >
-                  <div
-                    className="book-spine"
-                    style={{ width: "48px", height: `${h}px`, background: bg }}
-                  >
-                    {book.title}
+              <div className="profile-info">
+                <div className="profile-name">
+                  {profile.name}
+                  <button className="pencil-btn" onClick={openModal} aria-label="프로필 수정">✏️</button>
+                </div>
+                <div className="follow-wrap">
+                  <div className="follow-box">
+                    <div className="follow-num">{profile.followers}</div>
+                    <div className="follow-text">팔로워</div>
+                  </div>
+                  <div className="follow-box">
+                    <div className="follow-num">{profile.following}</div>
+                    <div className="follow-text">팔로잉</div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
+              </div>
+            </div>
 
-          {/* 나무 선반 */}
-          <div className="shelf-board" />
-        </div>
+            {/* 소개 */}
+            <div className="profile-desc">{profile.desc}</div>
+
+            <div className="divider" />
+
+            {/* 책장 */}
+            <div className="bookshelf-area">
+
+              {/* 조명 */}
+              <div className="lamp-wrap">
+                <div className="lamp-rod" />
+                <div className="lamp-head">
+                  <div className="lamp-glow" />
+                </div>
+              </div>
+
+              {/* 책 스크롤 */}
+              <div
+                ref={shelfRef}
+                className="book-scroll"
+                onMouseDown={onMouseDown}
+                onMouseMove={onMouseMove}
+                onMouseUp={onMouseUp}
+                onMouseLeave={onMouseUp}
+              >
+                {(profile.books || []).map((book, index) => {
+                  const h = heights[index % heights.length];
+                  const bg = colors[index % colors.length];
+                  return (
+                    <div
+                      key={index}
+                      className="book-item"
+                      onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
+                    >
+                      <div
+                        className="book-spine"
+                        style={{ width: "48px", height: `${h}px`, background: bg }}
+                      >
+                        {book.title}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 나무 선반 */}
+              <div className="shelf-board" />
+            </div>
+          </>
+        )}
       </div>
 
       {/* 프로필 수정 모달 */}
@@ -449,10 +585,18 @@ function Profile() {
               placeholder="소개글을 입력하세요"
             />
 
+            {saveError && (
+              <div style={{ marginTop: "10px", color: "#e57373", fontSize: "13px" }}>
+                {saveError}
+              </div>
+            )}
+
             {/* 버튼 */}
             <div className="modal-actions">
               <button className="btn-cancel" onClick={() => setShowModal(false)}>취소</button>
-              <button className="btn-save" onClick={handleSave}>저장하기</button>
+              <button className="btn-save" onClick={handleSave} disabled={saveLoading}>
+                {saveLoading ? "저장 중..." : "저장하기"}
+              </button>
             </div>
           </div>
         </div>
