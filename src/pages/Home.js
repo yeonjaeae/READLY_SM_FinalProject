@@ -17,39 +17,39 @@ import { Autoplay } from "swiper/modules";
 
 import "swiper/css";
 
-import { apiFetch } from "../api/api";
+import {
+  getPopularBook,
+  getBookClubs,
+  statusLabel,
+  typeToMood,
+} from "../api/api";
 
 function Home() {
   // ==================================================
   // ★ 인기 책 / 활동중인 모임
   //
-  // 기존: 하드코딩된 books 배열 + group-card 3개 고정
+  // 기존: 하나의 GET /api/home 으로 한번에 받아옴 (백엔드에 없는 API)
   //
-  // 변경: 백엔드에서 받아옴
+  // 변경: 실제 백엔드 명세에 맞춰 두 개로 분리해서 호출
   //
-  // 요청: GET /api/home
-  // 응답:
-  // {
-  //   "popularBooks": [
-  //     { "title": "노르웨이의 숲", "image": "/images/노르웨이의숲.jpeg" }
-  //   ],
-  //   "activeGroups": [
-  //     {
-  //       "id": 1,
-  //       "title": "<프로젝트 헤밍웨이>",
-  //       "timeRange": "12:00 ~ 01:00",
-  //       "status": "모임중",
-  //       "mood": "badge1",
-  //       "date": "2026.05.30",
-  //       "currentMembers": 5,
-  //       "maxMembers": 10
-  //     }
-  //   ]
-  // }
+  // 1) GET /api/books/popular
+  //    → 홈 화면 인기 도서 "1건" (배열이 아님)
+  //    { "name": "데미안", "coverImageUrl": "https://.../cover.jpg" }
+  //
+  // 2) GET /api/book-clubs
+  //    → 전체 독서모임 목록 (가입 여부 무관)
+  //    [{
+  //      "clubId": 1, "name": "...", "bookId": 1, "bookName": "...",
+  //      "bookCoverImageUrl": "...", "date": "2026-08-20", "time": "19:00:00",
+  //      "currentMemberCount": 3, "maxCapacity": 8,
+  //      "status": "PENDING" | "IN_PROGRESS" | "COMPLETED",
+  //      "type": "PASSIONATE" | "MODERATE" | "CALM",
+  //      "role": "HOST" | "PARTICIPANT" | null
+  //    }]
   // ==================================================
 
-  const [popularBooks, setPopularBooks] =
-    useState([]);
+  const [popularBook, setPopularBook] =
+    useState(null);
 
   const [activeGroups, setActiveGroups] =
     useState([]);
@@ -68,19 +68,14 @@ function Home() {
       setError("");
 
       try {
-        const data = await apiFetch(
-          "/api/home",
-          { method: "GET" }
-        );
+        const [book, clubs] = await Promise.all([
+          getPopularBook(),
+          getBookClubs(),
+        ]);
 
         if (!ignore) {
-          setPopularBooks(
-            data.popularBooks || []
-          );
-
-          setActiveGroups(
-            data.activeGroups || []
-          );
+          setPopularBook(book || null);
+          setActiveGroups(clubs || []);
         }
       } catch (err) {
         console.error(
@@ -165,98 +160,86 @@ function Home() {
         </div>
       )}
 
-      {/* 슬라이드 */}
+      {/* 슬라이드 — 인기 도서가 1건뿐이라 loop/autoplay는 끔 */}
 
-      {!loading &&
-        popularBooks.length > 0 && (
-          <Swiper
-            modules={[Autoplay]}
-            autoplay={{
-              delay: 2500,
-              disableOnInteraction: false,
-            }}
-            loop={true}
-            spaceBetween={14}
-            slidesPerView={1}
-            className="book-swiper"
-          >
-            {popularBooks.map(
-              (book, index) => (
-                <SwiperSlide
-                  key={index}
-                >
-                  <div className="hero-card">
-                    <img
-                      src={book.image}
-                      alt={book.title}
-                      className="hero-image"
-                    />
+      {!loading && popularBook && (
+        <Swiper
+          modules={[Autoplay]}
+          autoplay={false}
+          loop={false}
+          spaceBetween={14}
+          slidesPerView={1}
+          className="book-swiper"
+        >
+          <SwiperSlide>
+            <div className="hero-card">
+              <img
+                src={popularBook.coverImageUrl}
+                alt={popularBook.name}
+                className="hero-image"
+              />
 
-                    <div className="hero-title">
-                      {book.title}
-                    </div>
+              <div className="hero-title">
+                {popularBook.name}
+              </div>
 
-                    <div className="hero-sub">
-                      지금 가장 인기있는 책이에요
-                    </div>
-                  </div>
-                </SwiperSlide>
-              )
-            )}
-          </Swiper>
-        )}
+              <div className="hero-sub">
+                지금 가장 인기있는 책이에요
+              </div>
+            </div>
+          </SwiperSlide>
+        </Swiper>
+      )}
 
       {/* 모임 카드 */}
 
       {!loading &&
-        activeGroups.map((group) => (
-          <div
-            className="group-card"
-            key={group.id}
-          >
-            <div className="group-header">
-              <div>
-                <div className="group-title">
-                  {group.title}
+        activeGroups.map((group) => {
+          const mood = typeToMood(group.type);
+
+          return (
+            <div
+              className="group-card"
+              key={group.clubId}
+            >
+              <div className="group-header">
+                <div>
+                  <div className="group-title">
+                    {group.name}
+                  </div>
+
+                  <div className="group-info">
+                    {group.date} {group.time}
+                  </div>
                 </div>
 
-                <div className="group-info">
-                  {group.timeRange}
-                </div>
-              </div>
+                <div className="badge-wrap">
+                  <div className="badge">
+                    {statusLabel(group.status)}
+                  </div>
 
-              <div className="badge-wrap">
-                <div className="badge">
-                  {group.status}
-                </div>
-
-                <div
-                  className={
-                    group.mood
-                  }
-                >
-                  {moodLabel(
-                    group.mood
-                  )}
+                  <div className={mood}>
+                    {moodLabel(mood)}
+                  </div>
                 </div>
               </div>
+
+              <div className="line"></div>
+
+              <div className="group-footer">
+                <span>
+                  {group.date}
+                </span>
+
+                <span>
+                  {group.currentMemberCount}
+                  /
+                  {group.maxCapacity}명
+                </span>
+              </div>
             </div>
-
-            <div className="line"></div>
-
-            <div className="group-footer">
-              <span>
-                {group.date}
-              </span>
-
-              <span>
-                {group.currentMembers}
-                /
-                {group.maxMembers}명
-              </span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
     </div>
   );
 }

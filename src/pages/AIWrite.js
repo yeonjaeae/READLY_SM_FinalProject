@@ -1,6 +1,6 @@
 // src/pages/AIWrite.js
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import {
   FiSearch,
@@ -18,21 +18,107 @@ import {
 
 import Tesseract from "tesseract.js";
 
-// ==================================================
-// ★ 백엔드 주소
-//
-// 백엔드 팀원이 실제 배포/로컬 주소 알려주면 교체
-// ==================================================
-
-const API_BASE_URL =
-  "http://localhost:8080";
+import {
+  searchBooks,
+  registerBook,
+  writeNote,
+  generateAiNote,
+  getAiNote,
+} from "../api/api";
 
 function AIWrite() {
-  const [searched, setSearched] =
+  // ==================================================
+  // ★ 책 검색 / 선택 (백엔드 실제 엔드포인트로 교체)
+  //
+  // GET /api/books/search?keyword= → [{ isbn13, name, writer, coverImageUrl }]
+  // POST /api/books { isbn13 } → bookId (선택 즉시 등록해서 미리 받아둠)
+  //
+  // ⚠️ 백엔드는 "검색 → 선택 → 등록" 흐름만 지원하고
+  // 수기 입력(제목/저자 직접 입력)은 지원하지 않음
+  // ==================================================
+
+  const [keyword, setKeyword] =
+    useState("");
+
+  const [searchResults, setSearchResults] =
+    useState([]);
+
+  const [searchLoading, setSearchLoading] =
     useState(false);
 
-  const [selected, setSelected] =
-    useState(false);
+  const [selectedBook, setSelectedBook] =
+    useState(null); // { isbn13, name, writer, coverImageUrl, bookId }
+
+  const [
+    bookRegisterLoading,
+    setBookRegisterLoading,
+  ] = useState(false);
+
+  useEffect(() => {
+    if (keyword.trim() === "") {
+      setSearchResults([]);
+      return;
+    }
+
+    let ignore = false;
+
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+
+      try {
+        const data = await searchBooks(
+          keyword.trim()
+        );
+
+        if (!ignore) {
+          setSearchResults(data || []);
+        }
+      } catch (error) {
+        console.error(
+          "책 검색 오류:",
+          error
+        );
+
+        if (!ignore) {
+          setSearchResults([]);
+        }
+      } finally {
+        if (!ignore) {
+          setSearchLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+  }, [keyword]);
+
+  const handleSelectBook = async (book) => {
+    setBookRegisterLoading(true);
+
+    try {
+      const bookId = await registerBook(
+        book.isbn13
+      );
+
+      setSelectedBook({ ...book, bookId });
+      setKeyword("");
+      setSearchResults([]);
+    } catch (error) {
+      console.error(
+        "책 등록 오류:",
+        error
+      );
+
+      alert(
+        "책 정보를 등록하지 못했습니다. 다시 시도해주세요."
+      );
+    } finally {
+      setBookRegisterLoading(false);
+    }
+  };
 
   // ==================================================
   // 느낀점
@@ -83,21 +169,17 @@ function AIWrite() {
     useState("");
 
   // ==================================================
-  // ★ 오타 교정 관련
+  // ★ 오타 교정
   //
-  // Tesseract가 뽑아낸 원본 텍스트를
-  // 백엔드(LLM)로 보내서 자연스러운 문장으로 교정
+  // Tesseract가 뽑은 원본 텍스트를 자연스럽게 교정해주는
+  // 백엔드 API(예: POST /api/ocr/correct)는 실제 백엔드
+  // 명세서에 존재하지 않아서 제거함.
+  //
+  // 지금은 OCR로 추출한 원본 텍스트를 그대로 사용하고,
+  // 필요하면 사용자가 textarea에서 직접 수정하도록 함.
+  // (교정 기능이 정말 필요하면 백엔드 팀에 엔드포인트
+  // 추가를 요청해야 함)
   // ==================================================
-
-  const [
-    correctLoading,
-    setCorrectLoading,
-  ] = useState(false);
-
-  const [
-    correctError,
-    setCorrectError,
-  ] = useState("");
 
   // =========================
   // ★ 이미지 전처리 (흑백 + 적응형 대비 + 업스케일)
@@ -235,81 +317,7 @@ function AIWrite() {
   };
 
   // =========================
-  // ★ 오타 교정 요청 (백엔드 연동)
-  //
-  // Tesseract가 뽑은 원본 텍스트를
-  // 백엔드로 보내서, LLM이 문맥에 맞게
-  // 자연스러운 문장으로 교정해서 돌려줌
-  //
-  // 요청: { "rawText": "OCR 원본 텍스트" }
-  // 응답: { "correctedText": "교정된 문장" }
-  //
-  // ★ 백엔드가 아직 없어도 에러 시 원본 텍스트로
-  // 자동 폴백되니 지금 당장 화면이 깨지진 않음
-  // (백엔드 엔드포인트가 만들어지는 순간
-  // 이 코드 수정 없이 바로 연동됨)
-  // =========================
-
-  const correctOcrText = async (
-    rawText
-  ) => {
-    if (!rawText) {
-      return rawText;
-    }
-
-    setCorrectLoading(true);
-    setCorrectError("");
-
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/ocr/correct`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-            rawText,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          "오타 교정 요청에 실패했습니다."
-        );
-      }
-
-      const data =
-        await response.json();
-
-      return (
-        data.correctedText || rawText
-      );
-    } catch (error) {
-      console.error(
-        "오타 교정 오류:",
-        error
-      );
-
-      setCorrectError(
-        "오타 교정에 실패해서 원본 텍스트를 사용합니다."
-      );
-
-      // 실패해도 원본 텍스트는 그대로 쓸 수 있게 반환
-      return rawText;
-    } finally {
-      setCorrectLoading(false);
-    }
-  };
-
-  // =========================
   // OCR 실행 (Tesseract.js)
-  //
-  // 추출 → 자동으로 교정까지 이어서 진행
   // =========================
 
   const runOCR = async (file) => {
@@ -318,7 +326,6 @@ function AIWrite() {
     setOcrLoading(true);
     setOcrProgress(0);
     setOcrError("");
-    setCorrectError("");
     setOcrText("");
 
     try {
@@ -369,16 +376,7 @@ function AIWrite() {
         return;
       }
 
-      // ------------------------------------------
-      // ★ 추출 완료 → 바로 이어서 자동 교정
-      // ------------------------------------------
-
-      setOcrLoading(false);
-
-      const corrected =
-        await correctOcrText(rawText);
-
-      setOcrText(corrected);
+      setOcrText(rawText);
     } catch (error) {
       console.error(
         "OCR 오류:",
@@ -413,10 +411,16 @@ function AIWrite() {
   };
 
   // =========================
-  // AI 독후감 생성 요청 (백엔드 연동)
+  // ★ AI 독후감 생성 (백엔드 실제 엔드포인트로 교체)
   //
-  // 요청: { bookTitle, bookAuthor, quote, feeling }
-  // 응답: { "review": "생성된 독후감" }
+  // 1) POST /api/notes/books/{bookId} { phrase, feeling }
+  //    → 내 독서록(구절+느낌)을 먼저 저장
+  // 2) POST /api/notes/books/{bookId}/ai-generate
+  //    → 저장된 독서록들을 취합해 AI 독후감 생성, aiNoteId 반환
+  // 3) GET /api/notes/books/{bookId}/ai-note
+  //    → 생성된 AI 독후감 본문(content)을 조회
+  //
+  // 503: AI 서버 연결 실패/타임아웃/오류일 수 있음
   // =========================
 
   const handleGenerate = async () => {
@@ -424,54 +428,31 @@ function AIWrite() {
       return;
     }
 
+    if (!selectedBook?.bookId) {
+      setGenerateError(
+        "먼저 책을 검색해서 선택해주세요."
+      );
+
+      return;
+    }
+
     setGenerateLoading(true);
     setGenerateError("");
     setGenerated(false);
 
-    const requestData = {
-      bookTitle: "노르웨이의 숲",
-      bookAuthor: "무라카미 하루키",
-
-      quote: ocrText,
-
-      feeling: feeling,
-    };
-
-    console.log(
-      "AI 독후감 생성 요청 데이터:",
-      requestData
-    );
-
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/reviews/ai-generate`,
-        {
-          method: "POST",
+      await writeNote(selectedBook.bookId, {
+        phrase: ocrText,
+        feeling,
+      });
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
+      await generateAiNote(selectedBook.bookId);
 
-          body: JSON.stringify(
-            requestData
-          ),
-        }
+      const aiNote = await getAiNote(
+        selectedBook.bookId
       );
 
-      if (!response.ok) {
-        throw new Error(
-          "독후감 생성 요청에 실패했습니다."
-        );
-      }
-
-      const data =
-        await response.json();
-
-      setGeneratedText(
-        data.review || ""
-      );
-
+      setGeneratedText(aiNote?.content || "");
       setGenerated(true);
     } catch (error) {
       console.error(
@@ -494,8 +475,6 @@ function AIWrite() {
 
   const photoBtnLabel = ocrLoading
     ? `텍스트를 읽는 중... ${ocrProgress}%`
-    : correctLoading
-    ? "AI가 오타를 교정하고 있어요..."
     : "책 구절 사진 찍기";
 
   return (
@@ -534,50 +513,100 @@ function AIWrite() {
 
           <input
             placeholder="책 제목 검색하기"
-            onChange={() =>
-              setSearched(true)
+            value={keyword}
+            onChange={(e) =>
+              setKeyword(e.target.value)
             }
           />
         </div>
 
-        {searched && !selected && (
+        {searchLoading && (
           <div
+            style={{
+              fontSize: "12px",
+              color: "#888",
+              padding: "6px 2px",
+            }}
+          >
+            검색 중...
+          </div>
+        )}
+
+        {searchResults.map((book) => (
+          <div
+            key={book.isbn13}
             className="search-item"
             onClick={() =>
-              setSelected(true)
+              handleSelectBook(book)
             }
           >
             <div className="search-cover">
-              📘
+              {book.coverImageUrl ? (
+                <img
+                  src={book.coverImageUrl}
+                  alt={book.name}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              ) : (
+                "📘"
+              )}
             </div>
 
             <div>
               <div className="book-name">
-                노르웨이의 숲
+                {book.name}
               </div>
 
               <div className="book-author">
-                무라카미 하루키
+                {book.writer}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {selectedBook && (
+          <div className="book-result">
+            <div className="book-cover">
+              {selectedBook.coverImageUrl ? (
+                <img
+                  src={selectedBook.coverImageUrl}
+                  alt={selectedBook.name}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              ) : (
+                "📘"
+              )}
+            </div>
+
+            <div>
+              <div className="book-name">
+                {selectedBook.name}
+              </div>
+
+              <div className="book-author">
+                {selectedBook.writer}
               </div>
             </div>
           </div>
         )}
 
-        {selected && (
-          <div className="book-result">
-            <div className="book-cover">
-              📘
-            </div>
-
-            <div>
-              <div className="book-name">
-                노르웨이의 숲
-              </div>
-
-              <div className="book-author">
-                무라카미 하루키
-              </div>
-            </div>
+        {bookRegisterLoading && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#888",
+              padding: "6px 2px",
+            }}
+          >
+            책 정보를 등록하는 중...
           </div>
         )}
       </div>
@@ -653,35 +682,20 @@ function AIWrite() {
           </div>
         )}
 
-        {correctError && (
+        {ocrText && !ocrLoading && (
           <div
             style={{
               marginTop: "10px",
-              color: "#e0a44d",
-              fontSize: "13px",
+              fontSize: "12px",
+              color: "#888",
             }}
           >
-            {correctError}
+            ✨ 사진에서 텍스트를 추출했어요.
+            <br />
+            필요한 부분은 직접
+            수정할 수 있어요.
           </div>
         )}
-
-        {ocrText &&
-          !ocrLoading &&
-          !correctLoading && (
-            <div
-              style={{
-                marginTop: "10px",
-                fontSize: "12px",
-                color: "#888",
-              }}
-            >
-              ✨ 사진에서 텍스트를 추출하고
-              AI가 자연스럽게 교정했어요.
-              <br />
-              필요한 부분은 직접
-              수정할 수 있어요.
-            </div>
-          )}
       </div>
 
       {/* 느낀점 */}

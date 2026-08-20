@@ -3,16 +3,21 @@
 import { useLocation } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 
-// ==================================================
-// ★ 테스트용 임시 role
-//
-// 백엔드 연결 전까지만 프론트 테스트용으로 사용
-// 실제 연결되면 API 응답의 role 값으로 대체됨
-//
-// "HOST" | "PARTICIPANT"
-// ==================================================
+import {
+  getBookClubDetail,
+  getChatHistory,
+  requestHostAiAssist,
+  getMemberId,
+} from "../api/api";
 
-const TEST_ROLE = "HOST";
+import {
+  createChatClient,
+  sendChatMessage,
+  disconnectChatClient,
+} from "../api/chatSocket";
+
+// AI 발신자 고정 memberId (백엔드 명세: AI_MEMBER_ID = 999)
+const AI_MEMBER_ID = 999;
 
 function MeetingRoom() {
   const location = useLocation();
@@ -20,29 +25,27 @@ function MeetingRoom() {
   // ==================================================
   // Community에서 전달받은 최소 정보
   //
-  // ★ isHost는 더 이상 여기서 받지 않음
-  // (백엔드가 role로 내려주기 때문)
+  // title/mood는 API 응답을 받기 전까지 화면에 바로
+  // 보여주기 위한 임시 표시용. 정확한 값은 방 상세 조회로 갱신.
   // ==================================================
 
   const roomId = location.state?.roomId;
 
-  const roomTitle =
-    location.state?.title || "독서모임";
+  const [roomTitle, setRoomTitle] = useState(
+    location.state?.title || "독서모임"
+  );
 
-  const roomMood =
-    location.state?.mood || "badge1";
+  const myMemberId = getMemberId();
 
   // ==================================================
-  // ★ 역할 (방장 / 일반 참가자)
+  // ★ 방 상세 (역할 / 방장 정보)
   //
-  // 방 입장/조회 API가 아래 형태로 내려주는 값
+  // GET /api/book-clubs/{clubId}
+  // → { ..., hostId, role: "HOST" | "PARTICIPANT" }
   //
-  // {
-  //   "roomId": 123,
-  //   "role": "HOST" | "PARTICIPANT"
-  // }
-  //
-  // → role === "HOST" 일 때만 AI 진행자 버튼 표시
+  // 가입하지 않은 회원이 조회하면 409가 남
+  // (Community.js에서 참여 시 join을 먼저 호출하므로
+  // 이 화면에 들어왔다는 것 자체가 가입된 상태라는 전제)
   // ==================================================
 
   const [role, setRole] = useState(null);
@@ -50,62 +53,41 @@ function MeetingRoom() {
   const [roleLoading, setRoleLoading] =
     useState(true);
 
+  const [roomError, setRoomError] =
+    useState("");
+
   useEffect(() => {
     let ignore = false;
 
-    const fetchRoomRole = async () => {
+    const fetchRoomDetail = async () => {
+      if (!roomId) {
+        setRoleLoading(false);
+        return;
+      }
+
       setRoleLoading(true);
+      setRoomError("");
 
       try {
-        // ==================================================
-        // ★ 실제 백엔드 연결 시 사용할 코드
-        //
-        // 방 입장 / 방 정보 조회 API 호출
-        // ==================================================
-
-        /*
-        const response = await fetch(
-          `http://localhost:8080/api/rooms/${roomId}/enter`
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            "방 정보를 불러오지 못했습니다."
-          );
-        }
-
-        const data = await response.json();
-
-        // data: { roomId: 123, role: "HOST" | "PARTICIPANT" }
+        const data = await getBookClubDetail(roomId);
 
         if (!ignore) {
           setRole(data.role);
-        }
-        */
-
-        // ==================================================
-        // 현재는 백엔드 연결 전 - 프론트 테스트용
-        //
-        // ★ 나중에 위 fetch 블록의 주석만 풀고
-        // 이 아래 두 줄만 지우면 됨
-        // ==================================================
-
-        if (!ignore) {
-          setRole(TEST_ROLE);
+          setRoomTitle(data.name);
         }
       } catch (error) {
         console.error(
-          "방 역할을 불러오는 중 오류:",
+          "방 정보를 불러오는 중 오류:",
           error
         );
 
-        // ------------------------------------------
         // 실패 시 안전하게 일반 참가자로 처리
-        // (AI 버튼 등 방장 전용 기능이 잘못 노출되지 않도록)
-        // ------------------------------------------
-
+        // (AI 진행자 버튼 등 방장 전용 기능이 잘못 노출되지 않도록)
         if (!ignore) {
           setRole("PARTICIPANT");
+          setRoomError(
+            "방 정보를 불러오지 못했습니다."
+          );
         }
       } finally {
         if (!ignore) {
@@ -114,16 +96,12 @@ function MeetingRoom() {
       }
     };
 
-    fetchRoomRole();
+    fetchRoomDetail();
 
     return () => {
       ignore = true;
     };
   }, [roomId]);
-
-  // ==================================================
-  // ★ isHost는 이제 role에서 파생된 값
-  // ==================================================
 
   const isHost = role === "HOST";
 
@@ -134,60 +112,119 @@ function MeetingRoom() {
   const [input, setInput] = useState("");
 
   // ==================================================
-  // AI 로딩
+  // AI 로딩 (방장 전용 AI 진행자 요청)
   // ==================================================
 
   const [aiLoading, setAiLoading] =
     useState(false);
 
+  const [aiError, setAiError] =
+    useState("");
+
   // ==================================================
   // 메시지
+  //
+  // ★ 채팅 이력 (GET /api/book-clubs/{clubId}/chats)으로
+  // 초기 목록을 받아온 뒤, STOMP 구독으로 실시간 메시지를 이어붙임
+  //
+  // 서버 응답 형식:
+  // { messageId, memberId, senderName, content, createdAt }
   // ==================================================
 
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      user: "AI",
-      type: "ai",
-      text:
-        "모임원들의 독후감과 기록을 먼저 정리했어요 ✨\n\n• 외로움과 연결감\n• 상실 이후의 성장\n• 잔잔하지만 깊은 감정선\n• 현실적인 인간 관계",
-    },
+  const [messages, setMessages] = useState([]);
 
-    {
-      id: 2,
-      user: "AI",
-      type: "ai",
-      text:
-        "오늘은 가장 기억에 남았던 문장을 함께 이야기해볼게요 🙂",
-    },
+  const [historyLoading, setHistoryLoading] =
+    useState(true);
 
-    {
-      id: 3,
-      user: "민지",
-      type: "other",
-      color: "#FFB6C1",
-      text:
-        "저는 마지막 장면이 가장 슬펐어요.",
-    },
+  const mapServerMessage = (m) => ({
+    id: m.messageId,
+    user: m.senderName,
+    type:
+      m.memberId === AI_MEMBER_ID
+        ? "ai"
+        : m.memberId === myMemberId
+        ? "me"
+        : "other",
+    text: m.content,
+  });
 
-    {
-      id: 4,
-      user: "현우",
-      type: "other",
-      color: "#87CEEB",
-      text:
-        "문장이 진짜 고요해서 좋았어요.",
-    },
+  useEffect(() => {
+    let ignore = false;
 
-    {
-      id: 5,
-      user: "서연",
-      type: "other",
-      color: "#C3E88D",
-      text:
-        "와타나베 감정선이 너무 현실적이었어요.",
-    },
-  ]);
+    const fetchHistory = async () => {
+      if (!roomId) {
+        setHistoryLoading(false);
+        return;
+      }
+
+      setHistoryLoading(true);
+
+      try {
+        const data = await getChatHistory(roomId);
+
+        if (!ignore) {
+          setMessages((data || []).map(mapServerMessage));
+        }
+      } catch (error) {
+        console.error(
+          "채팅 이력 조회 오류:",
+          error
+        );
+      } finally {
+        if (!ignore) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    fetchHistory();
+
+    return () => {
+      ignore = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  // ==================================================
+  // ★ 실시간 채팅 (STOMP)
+  //
+  // CONNECT /ws/chat → SUBSCRIBE /sub/chat/clubs/{clubId}
+  // 구독은 "구독 시점 이후" 메시지만 전달되므로,
+  // 위의 REST 이력 조회와 합쳐서 화면에 보여줌
+  // ==================================================
+
+  const chatClientRef = useRef(null);
+
+  useEffect(() => {
+    if (!roomId) {
+      return undefined;
+    }
+
+    const client = createChatClient({
+      clubId: roomId,
+      onMessage: (body) => {
+        setMessages((prev) => [
+          ...prev,
+          mapServerMessage(body),
+        ]);
+      },
+      onError: () => {
+        console.error(
+          "실시간 채팅 연결에 실패했습니다."
+        );
+      },
+    });
+
+    chatClientRef.current = client;
+
+    return () => {
+      disconnectChatClient(client);
+      chatClientRef.current = null;
+    };
+    // mapServerMessage는 렌더마다 새로 만들어지는 함수라 deps에 넣으면
+    // 소켓이 계속 재연결되므로 의도적으로 제외함. roomId가 바뀔 때만 재연결.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
 
   // ==================================================
   // 채팅 영역 DOM 참조
@@ -214,6 +251,12 @@ function MeetingRoom() {
 
   // ==================================================
   // 일반 메시지 보내기
+  //
+  // ★ SEND /pub/chat/clubs/{clubId} — { content }
+  //
+  // 보낸 사람은 서버가 토큰의 memberId로 고정하므로
+  // 클라이언트에서 화면에 즉시 낙관적으로 추가하지 않고,
+  // 구독으로 돌아오는 브로드캐스트(내가 보낸 것 포함)로만 반영함
   // ==================================================
 
   const sendMessage = () => {
@@ -223,17 +266,15 @@ function MeetingRoom() {
       return;
     }
 
-    const myMessage = {
-      id: Date.now(),
-      user: "나",
-      type: "me",
-      text: text,
-    };
+    if (!roomId) {
+      return;
+    }
 
-    setMessages((prev) => [
-      ...prev,
-      myMessage,
-    ]);
+    sendChatMessage(
+      chatClientRef.current,
+      roomId,
+      text
+    );
 
     setInput("");
   };
@@ -241,10 +282,14 @@ function MeetingRoom() {
   // ==================================================
   // AI 진행자 요청
   //
-  // ★ 방장만 실행 가능
+  // ★ POST /api/book-clubs/{clubId}/ai-assist — { mode }
+  // 방장만 호출 가능(호출자가 방장이 아니면 409)
+  //
+  // 이 API는 응답 바디가 없고, AI 응답은 AI 이름으로 채팅방에
+  // 바로 발행되어 위의 STOMP 구독을 통해 도착함
   // ==================================================
 
-  const requestAI = async () => {
+  const requestAI = async (mode = "question") => {
     if (!isHost) {
       return;
     }
@@ -254,48 +299,24 @@ function MeetingRoom() {
     }
 
     setAiLoading(true);
+    setAiError("");
 
-    // 현재 대화 내용
-    const conversation =
-      messages.map((message) => ({
-        user: message.user,
-        type: message.type,
-        text: message.text,
-      }));
+    try {
+      await requestHostAiAssist(roomId, mode);
+      // 응답은 채팅으로 브로드캐스트되므로 여기서 메시지를 추가하지 않음
+    } catch (error) {
+      console.error(
+        "AI 진행자 요청 오류:",
+        error
+      );
 
-    // 나중에 백엔드로 전달할 데이터
-    const requestData = {
-      roomId: roomId,
-      roomTitle: roomTitle,
-      mood: roomMood,
-      messages: conversation,
-    };
-
-    console.log(
-      "AI 진행자 요청 데이터:",
-      requestData
-    );
-
-    // ==================================================
-    // 현재는 프론트 테스트용
-    // ==================================================
-
-    setTimeout(() => {
-      const aiReply = {
-        id: Date.now(),
-        user: "AI",
-        type: "ai",
-        text:
-          "좋은 의견들이 나오고 있네요 🌿\n\n지금까지 이야기한 내용을 보면 인물의 감정과 상실에 대한 이야기가 많이 나온 것 같아요.\n\n여러분은 이 책에서 가장 공감했던 인물의 감정이 무엇이었나요?",
-      };
-
-      setMessages((prev) => [
-        ...prev,
-        aiReply,
-      ]);
-
+      setAiError(
+        error.message ||
+          "AI 진행자 요청 중 오류가 발생했습니다."
+      );
+    } finally {
       setAiLoading(false);
-    }, 500);
+    }
   };
 
   // ==================================================
@@ -355,6 +376,18 @@ function MeetingRoom() {
         </div>
       </div>
 
+      {roomError && (
+        <div
+          style={{
+            padding: "8px 14px",
+            fontSize: "12px",
+            color: "#e57373",
+          }}
+        >
+          {roomError}
+        </div>
+      )}
+
       {/* ==================================================
           채팅 영역
       ================================================== */}
@@ -392,6 +425,19 @@ function MeetingRoom() {
               : "15px 14px 156px",
         }}
       >
+        {historyLoading && (
+          <div
+            style={{
+              fontSize: "13px",
+              color: "#888",
+              textAlign: "center",
+              padding: "20px 0",
+            }}
+          >
+            대화 내용을 불러오는 중...
+          </div>
+        )}
+
         {messages.map((msg) => (
           <div
             key={msg.id}
@@ -414,10 +460,10 @@ function MeetingRoom() {
                   background:
                     msg.type === "ai"
                       ? "#9bd44e"
-                      : msg.color,
+                      : "#87CEEB",
                 }}
               >
-                {msg.user[0]}
+                {msg.user?.[0]}
               </div>
             )}
 
@@ -485,7 +531,7 @@ function MeetingRoom() {
         >
           <button
             type="button"
-            onClick={requestAI}
+            onClick={() => requestAI("question")}
             disabled={aiLoading}
             style={{
               width: "100%",
@@ -528,6 +574,19 @@ function MeetingRoom() {
               ? "✨ AI가 생각하고 있어요..."
               : "✨ AI 진행자에게 질문하기"}
           </button>
+
+          {aiError && (
+            <div
+              style={{
+                marginTop: "6px",
+                fontSize: "12px",
+                color: "#e57373",
+                textAlign: "center",
+              }}
+            >
+              {aiError}
+            </div>
+          )}
         </div>
       )}
 

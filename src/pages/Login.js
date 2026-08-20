@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import {
   login,
   setToken,
+  setMemberId,
 } from "../api/api";
 
 function Login() {
@@ -18,10 +19,6 @@ function Login() {
   const [password, setPassword] =
     useState("");
 
-  // ==================================================
-  // ★ 로딩 / 에러 상태
-  // ==================================================
-
   const [loading, setLoading] =
     useState(false);
 
@@ -29,15 +26,17 @@ function Login() {
     useState("");
 
   // ==================================================
-  // ★ 로그인 요청 (백엔드 연동)
-  //
-  // 기존: localStorage에 저장된 값과 비교하는
-  //      프론트 전용 가짜 로그인
-  //
-  // 변경: 실제 로그인 API 호출
+  // ★ 로그인 요청 (POST /api/members/login, 인증 불필요)
   //
   // 요청: { email, password }
-  // 응답: { token, user: { id, name, email } }
+  // 응답: { memberId, accessToken }
+  //
+  // ⚠️ 현재 백엔드 명세에는 "내 프로필 조회" GET API가 없음
+  // (PATCH /api/members/me/profile로 수정만 가능).
+  // 그래서 로그인 직후에는 닉네임/소개 등을 알 수 없고
+  // memberId만 저장할 수 있음.
+  // → 백엔드에 GET 프로필 조회 API가 추가되면
+  //   로그인 성공 후 이어서 호출해 이름까지 채워야 함
   // ==================================================
 
   const handleLogin = async () => {
@@ -62,19 +61,20 @@ function Login() {
         password
       );
 
-      // ------------------------------------------
-      // 로그인 성공
-      //
-      // - 토큰 저장 (이후 모든 API 요청에 자동 첨부됨)
-      // - 사용자 정보도 같이 저장해서
-      //   Profile.js 등에서 바로 꺼내 쓸 수 있게 함
-      // ------------------------------------------
+      setToken(data.accessToken);
+      setMemberId(data.memberId);
 
-      setToken(data.token);
+      // ------------------------------------------
+      // 이름 정보가 없으니 일단 memberId만 저장.
+      // 프로필 조회 API가 생기면 여기서 이어서
+      // 이름/이미지 등을 채워넣으면 됨
+      // ------------------------------------------
 
       localStorage.setItem(
         "currentUser",
-        JSON.stringify(data.user)
+        JSON.stringify({
+          id: data.memberId,
+        })
       );
 
       navigate("/home");

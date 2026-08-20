@@ -1,57 +1,47 @@
 // src/api/api.js
-
-// ==================================================
-// ★ 백엔드 주소
 //
-// 백엔드 팀원이 실제 배포/로컬 주소 알려주면
-// 여기 한 곳만 바꾸면 전체 앱에 적용됨
 // ==================================================
-
-export const API_BASE_URL =
-  "http://localhost:8080";
-
-// ==================================================
-// ★ 로그인 토큰 저장/조회
+// ★ 백엔드 API 명세 기준 (backend 브랜치, 2026-08-20)
 //
-// 로그인 성공 시 setToken()으로 저장해두면
-// 이후 모든 apiFetch 호출에 자동으로 붙음
+// - 인증: Authorization: Bearer <accessToken>
+// - 사용자 식별은 토큰의 memberId로 서버가 처리
+//   (요청 바디로 memberId를 보내는 API는 없음)
+// - ResponseEntity<Void> → 상태 200, 바디 없음
+// - ResponseEntity<Long> → 상태 200, 바디는 순수 숫자
 // ==================================================
 
-const TOKEN_KEY = "readlyToken";
+const API_BASE_URL = "http://localhost:8080";
 
-export function getToken() {
-  return localStorage.getItem(
-    TOKEN_KEY
-  );
-}
+const TOKEN_KEY = "accessToken";
+const MEMBER_ID_KEY = "memberId";
+
+/* ===================== 인증 토큰 저장 ===================== */
 
 export function setToken(token) {
-  localStorage.setItem(
-    TOKEN_KEY,
-    token
-  );
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
-export function clearToken() {
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setMemberId(memberId) {
+  localStorage.setItem(MEMBER_ID_KEY, String(memberId));
+}
+
+export function getMemberId() {
+  const value = localStorage.getItem(MEMBER_ID_KEY);
+  return value ? Number(value) : null;
+}
+
+export function clearAuth() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(MEMBER_ID_KEY);
 }
 
-// ==================================================
-// ★ 공통 fetch 래퍼
-//
-// - API_BASE_URL 자동으로 붙여줌
-// - Content-Type 자동 설정
-// - 로그인 토큰이 있으면 Authorization 헤더 자동 첨부
-// - 실패 시 백엔드가 보내주는 에러 메시지를 최대한 살려서 throw
-//
-// 사용 예시:
-// const data = await apiFetch("/api/rooms", { method: "GET" });
-// ==================================================
+/* ===================== 공통 fetch 래퍼 ===================== */
 
-export async function apiFetch(
-  path,
-  options = {}
-) {
+export async function apiFetch(path, options = {}) {
   const token = getToken();
 
   const headers = {
@@ -60,84 +50,232 @@ export async function apiFetch(
   };
 
   if (token) {
-    headers["Authorization"] =
-      `Bearer ${token}`;
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(
-    `${API_BASE_URL}${path}`,
-    {
-      ...options,
-      headers,
-    }
-  );
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers,
+  });
 
-  // ------------------------------------------
-  // 응답 body가 없거나 JSON이 아닐 수도 있으니
-  // 안전하게 파싱 시도
-  // ------------------------------------------
-
+  // ResponseEntity<Void>(빈 바디) / 숫자 응답 모두 대응
+  const text = await response.text();
   let data = null;
 
-  try {
-    data = await response.json();
-  } catch (parseError) {
-    data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = text;
+    }
   }
 
   if (!response.ok) {
+    // GlobalExceptionHandler 에러 포맷: { "message": "..." }
     const message =
-      data?.message ||
-      "요청 처리 중 오류가 발생했습니다.";
+      (data && data.message) || `요청에 실패했습니다. (${response.status})`;
 
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
 
   return data;
 }
 
-// ==================================================
-// ★ 인증 관련 API
-// ==================================================
+/* ===================== 1. 회원 (/api/members) ===================== */
 
-// 요청: { email, password }
-// 응답: { token: "...", user: { id, name, email } }
-export function login(
-  email,
-  password
-) {
-  return apiFetch("/api/auth/login", {
+// 인증 불필요. 응답: 생성된 memberId (순수 숫자)
+export function signup(loginId, email, password) {
+  return apiFetch("/api/members/signup", {
     method: "POST",
-    body: JSON.stringify({
-      email,
-      password,
-    }),
+    body: JSON.stringify({ loginId, email, password }),
   });
 }
 
-// 요청: { name, email, password }
-// 응답: { success: true }
-export function signup(
-  name,
-  email,
-  password
-) {
-  return apiFetch(
-    "/api/auth/signup",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        email,
-        password,
-      }),
-    }
-  );
+// 인증 불필요. 응답: { memberId, accessToken }
+export function login(email, password) {
+  return apiFetch("/api/members/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
 }
 
-export function logout() {
-  clearToken();
-  localStorage.removeItem(
-    "currentUser"
-  );
+// 나를 팔로우하는 사람 목록 → [{ memberId, nickname, introduction }]
+export function getFollowers(memberId) {
+  return apiFetch(`/api/members/${memberId}/followers`, { method: "GET" });
 }
+
+// 내가 팔로우하는 사람 목록 → [{ memberId, nickname, introduction }]
+export function getFollowings(memberId) {
+  return apiFetch(`/api/members/${memberId}/followings`, { method: "GET" });
+}
+
+// 팔로우하기. 주체는 토큰의 memberId로 고정됨.
+// ⚠️ 언팔로우(취소) API는 현재 백엔드에 없음.
+export function follow(followingId) {
+  return apiFetch(`/api/members/${followingId}/follow`, { method: "POST" });
+}
+
+// 내 프로필 수정 (닉네임 / 소개만 가능, 로그인 아이디 변경 불가)
+// ⚠️ 내 프로필/타인 프로필을 GET으로 "조회"하는 API는 현재 백엔드에 없음.
+export function updateMyProfile({ nickname, introduction }) {
+  return apiFetch("/api/members/me/profile", {
+    method: "PATCH",
+    body: JSON.stringify({ nickname, introduction }),
+  });
+}
+
+/* ===================== 2. 도서 (/api/books) ===================== */
+
+// 홈 화면 인기 도서 "1건" → { name, coverImageUrl }
+export function getPopularBook() {
+  return apiFetch("/api/books/popular", { method: "GET" });
+}
+
+// 내가 읽은 책 목록 → [{ bookId, name, coverImageUrl }]
+export function getMyBookList() {
+  return apiFetch("/api/books/my-list", { method: "GET" });
+}
+
+// 제목으로 책 검색 (아무것도 저장 안 함)
+// → [{ isbn13, name, writer, coverImageUrl }]
+export function searchBooks(keyword) {
+  return apiFetch(`/api/books/search?keyword=${encodeURIComponent(keyword)}`, {
+    method: "GET",
+  });
+}
+
+// 검색 결과에서 고른 책 등록(이미 있으면 재사용) → bookId (순수 숫자)
+export function registerBook(isbn13) {
+  return apiFetch("/api/books", {
+    method: "POST",
+    body: JSON.stringify({ isbn13 }),
+  });
+}
+
+// ISBN으로 책 조회 (레거시, POST /api/books와 사실상 동일)
+export function getBookByIsbn(isbn13) {
+  return apiFetch(`/api/books/isbn/${isbn13}`, { method: "GET" });
+}
+
+// 내가 읽은 책 목록에 추가
+export function addToMyBookList(bookId) {
+  return apiFetch(`/api/books/${bookId}/my-list`, { method: "POST" });
+}
+
+/* ===================== 3. 독서모임 (/api/book-clubs) ===================== */
+
+// enum 헬퍼 — FE 표시용 라벨/뱃지 매핑
+export function typeToMood(type) {
+  if (type === "PASSIONATE") return "badge1"; // 깊게 토론해요
+  if (type === "MODERATE") return "badge2"; // 부담없이 참여해요
+  if (type === "CALM") return "badge3"; // 함께 이야기해요
+  return "badge1";
+}
+
+export function moodToType(mood) {
+  if (mood === "badge1") return "PASSIONATE";
+  if (mood === "badge2") return "MODERATE";
+  if (mood === "badge3") return "CALM";
+  return "MODERATE";
+}
+
+export function statusLabel(status) {
+  if (status === "PENDING") return "모집중";
+  if (status === "IN_PROGRESS") return "모임중";
+  if (status === "COMPLETED") return "종료";
+  return status;
+}
+
+// 전체 독서모임 목록 (가입 여부 무관). role은 가입한 모임만 값 존재.
+export function getBookClubs() {
+  return apiFetch("/api/book-clubs", { method: "GET" });
+}
+
+// 내가 가입한 독서모임 목록
+export function getMyBookClubs() {
+  return apiFetch("/api/book-clubs/my-list", { method: "GET" });
+}
+
+// 독서모임 상세 (가입한 회원만 조회 가능, 미가입 시 409)
+export function getBookClubDetail(clubId) {
+  return apiFetch(`/api/book-clubs/${clubId}`, { method: "GET" });
+}
+
+// 독서모임 생성 (생성자는 자동 가입 + 방장 지정) → clubId (순수 숫자)
+export function createBookClub({ name, bookId, date, time, maxCapacity, type }) {
+  return apiFetch("/api/book-clubs", {
+    method: "POST",
+    body: JSON.stringify({ name, bookId, date, time, maxCapacity, type }),
+  });
+}
+
+// 독서모임 가입
+export function joinBookClub(clubId) {
+  return apiFetch(`/api/book-clubs/${clubId}/join`, { method: "POST" });
+}
+
+/* ===================== 4. 독서록 (/api/notes) ===================== */
+
+// 독서록 작성 (직접 입력 / OCR 텍스트) → noteId (순수 숫자)
+export function writeNote(bookId, { phrase, feeling }) {
+  return apiFetch(`/api/notes/books/${bookId}`, {
+    method: "POST",
+    body: JSON.stringify({ phrase, feeling }),
+  });
+}
+
+// 내가 그 책에 쓴 독서록 목록
+export function getNotes(bookId) {
+  return apiFetch(`/api/notes/books/${bookId}`, { method: "GET" });
+}
+
+// 한 책에 대한 내 AI 독서록 조회
+// → { exists, aiNoteId, content, tags, edited } (생성 전이면 exists:false)
+export function getAiNote(bookId) {
+  return apiFetch(`/api/notes/books/${bookId}/ai-note`, { method: "GET" });
+}
+
+// AI 독후감 생성 요청 (내가 그 책에 쓴 독서록들을 취합) → aiNoteId (순수 숫자)
+// 503: AI 서버 연결 실패/오류 가능
+export function generateAiNote(bookId) {
+  return apiFetch(`/api/notes/books/${bookId}/ai-generate`, { method: "POST" });
+}
+
+// AI 독서록 직접 수정 (본인 소유 아니면 403)
+export function updateAiNote(aiNoteId, newAiContent) {
+  return apiFetch(`/api/notes/ai-notes/${aiNoteId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ newAiContent }),
+  });
+}
+
+/* ===================== 5. 채팅 (REST 부분) ===================== */
+
+// 채팅 이력 조회 (최근 7일치, createdAt 오름차순). 가입 회원만 가능(409)
+export function getChatHistory(clubId) {
+  return apiFetch(`/api/book-clubs/${clubId}/chats`, { method: "GET" });
+}
+
+// 참여자용 AI 개입 요청
+// ⚠️ 알려진 문제(백엔드 명세서 원문): AI 서버로 보내는 요청 형식이
+// AI 서버가 요구하는 형식(book_title, chat_history)과 달라
+// 현재 항상 503으로 실패함 (docs/known-issues.md #11)
+export function requestMeetingAssist(clubId) {
+  return apiFetch(`/api/book-clubs/${clubId}/meeting/assist`, {
+    method: "POST",
+  });
+}
+
+// 방장 전용 AI 진행자 개입. 응답을 AI 이름으로 채팅방에 바로 발행하므로
+// REST 응답 자체엔 내용이 없고, 결과는 STOMP 구독으로 전달됨.
+// mode: "question" | "summary"
+export function requestHostAiAssist(clubId, mode) {
+  return apiFetch(`/api/book-clubs/${clubId}/ai-assist`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+}
+
+export { API_BASE_URL };

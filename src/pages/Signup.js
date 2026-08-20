@@ -9,7 +9,17 @@ import { signup } from "../api/api";
 function Signup() {
   const navigate = useNavigate();
 
-  const [name, setName] =
+  // ==================================================
+  // ★ 회원가입 (POST /api/members/signup, 인증 불필요)
+  //
+  // 요청: { loginId, email, password }
+  // 응답: 생성된 memberId (순수 숫자, 객체로 감싸지 않음)
+  //
+  // 닉네임(표시 이름)은 이 API에 없고, 가입 후
+  // PATCH /api/members/me/profile에서 따로 설정해야 함
+  // ==================================================
+
+  const [loginId, setLoginId] =
     useState("");
 
   const [email, setEmail] =
@@ -18,36 +28,20 @@ function Signup() {
   const [password, setPassword] =
     useState("");
 
-  // ==================================================
-  // ★ 로딩 / 에러 상태
-  // ==================================================
-
   const [loading, setLoading] =
     useState(false);
 
   const [error, setError] =
     useState("");
 
-  // ==================================================
-  // ★ 회원가입 요청 (백엔드 연동)
-  //
-  // 기존: localStorage에 평문 비밀번호까지
-  //      그대로 저장하는 프론트 전용 가짜 가입
-  //
-  // 변경: 실제 회원가입 API 호출
-  //
-  // 요청: { name, email, password }
-  // 응답: { success: true }
-  // ==================================================
-
   const handleSignup = async () => {
     if (loading) {
       return;
     }
 
-    if (!name || !email || !password) {
+    if (!loginId || !email || !password) {
       setError(
-        "이름, 이메일, 비밀번호를 모두 입력해주세요."
+        "아이디, 이메일, 비밀번호를 모두 입력해주세요."
       );
 
       return;
@@ -58,21 +52,13 @@ function Signup() {
 
     try {
       await signup(
-        name,
+        loginId,
         email,
         password
       );
 
-      // ------------------------------------------
-      // 가입 성공 → 로그인 페이지로 이동
-      //
-      // (백엔드가 가입과 동시에 토큰을 바로 내려주는 방식이라면
-      // login()처럼 setToken까지 여기서 처리하고
-      // /home으로 바로 보내도록 바꾸면 됨)
-      // ------------------------------------------
-
       alert(
-        "회원가입이 완료되었습니다. 로그인해주세요."
+        "회원가입이 완료되었습니다. 로그인 후 프로필에서 닉네임을 설정해주세요."
       );
 
       navigate("/login");
@@ -104,10 +90,10 @@ function Signup() {
 
         <input
           className="auth-input"
-          placeholder="이름"
-          value={name}
+          placeholder="아이디 (로그인용)"
+          value={loginId}
           onChange={(e) =>
-            setName(e.target.value)
+            setLoginId(e.target.value)
           }
         />
 

@@ -3,7 +3,14 @@
 import { useState, useRef, useEffect } from "react";
 import { FiSettings } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
-import { apiFetch } from "../api/api";
+
+import {
+  getMemberId,
+  getFollowers,
+  getFollowings,
+  getMyBookList,
+  updateMyProfile,
+} from "../api/api";
 
 const heights = [180, 220, 160, 200, 175, 215, 165, 190, 205];
 const colors = ["#7bc142", "#a8d84e", "#5aab35", "#c5e87a", "#68b83e", "#b2de5f", "#4e9e2f", "#d4f09a", "#89c94f"];
@@ -14,26 +21,31 @@ function Profile() {
   // ==================================================
   // ★ 내 프로필 (백엔드 연동)
   //
-  // 기존: localStorage의 currentUser + 하드코딩된
-  //      initialBooks 9권 + 팔로워/팔로잉 100 고정
+  // ⚠️ 중요: 백엔드 명세서에 "내 프로필 조회" GET API가
+  // 존재하지 않음. 있는 건 PATCH /api/members/me/profile
+  // (닉네임/소개 "수정"만) 뿐이고, 응답도 바디가 없음(200, Void).
   //
-  // 변경: 백엔드에서 조회
+  // 그래서 지금은:
+  // - 닉네임 / 소개 / 프로필 이미지 → 표시할 방법이 없음
+  //   (편집 모달에서 입력한 값을 이 세션 동안만 기억)
+  // - 팔로워/팔로잉 수 → GET /api/members/{memberId}/followers,
+  //   /followings 로 대체 조회(개수만 사용)
+  // - 읽은 책 목록 → GET /api/books/my-list
   //
-  // 요청: GET /api/users/me
-  // 응답: {
-  //   "name": "김수연",
-  //   "desc": "에세이를 좋아하는 책린이 입니다!",
-  //   "image": "/images/프로필사진.png",
-  //   "followers": 12,
-  //   "following": 8,
-  //   "books": [
-  //     { "title": "노르웨이의 숲", "review": "..." }
-  //   ]
-  // }
+  // → 백엔드에 GET /api/members/me (또는 유사) 프로필 조회
+  //   API가 추가되면 이 부분을 그걸로 교체해야 함
   // ==================================================
 
-  const [profile, setProfile] =
-    useState(null);
+  const memberId = getMemberId();
+
+  const [profile, setProfile] = useState({
+    name: "",
+    desc: "",
+    image: "",
+    followers: 0,
+    following: 0,
+    books: [],
+  });
 
   const [loading, setLoading] =
     useState(true);
@@ -42,16 +54,37 @@ function Profile() {
     useState("");
 
   const fetchProfile = async () => {
+    if (!memberId) {
+      setError("로그인 정보를 찾을 수 없어요.");
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError("");
 
     try {
-      const data = await apiFetch(
-        "/api/users/me",
-        { method: "GET" }
-      );
+      const [followers, followings, books] =
+        await Promise.all([
+          getFollowers(memberId),
+          getFollowings(memberId),
+          getMyBookList(),
+        ]);
 
-      setProfile(data);
+      setProfile((prev) => ({
+        ...prev,
+        followers: (followers || []).length,
+        following: (followings || []).length,
+        // my-list 응답은 { bookId, name, coverImageUrl }라
+        // book-spine에서 쓰는 title 필드로 맞춰줌
+        // (review 텍스트는 이 API에 없어서 비워둠)
+        books: (books || []).map((b) => ({
+          bookId: b.bookId,
+          title: b.name,
+          coverImageUrl: b.coverImageUrl,
+          review: "",
+        })),
+      }));
     } catch (err) {
       console.error(
         "프로필 조회 오류:",
@@ -68,6 +101,7 @@ function Profile() {
 
   useEffect(() => {
     fetchProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 모달 상태
@@ -119,17 +153,14 @@ function Profile() {
   // ==================================================
   // ★ 저장 (백엔드 연동)
   //
-  // 요청: PATCH /api/users/me
-  // {
-  //   "name": "...",
-  //   "desc": "...",
-  //   "image": "data:image/png;base64,..." (수정한 경우만)
-  // }
+  // PATCH /api/members/me/profile
+  // 요청: { nickname, introduction } (둘 다 선택값)
+  // 응답: 없음 (200)
   //
-  // 응답: 수정된 프로필 객체 (GET과 같은 형태)
-  //
-  // ※ 이미지가 커지면 base64 대신 별도
-  // multipart/form-data 업로드 API로 분리하는 게 나을 수 있음
+  // ⚠️ 이 API는 이미지를 받지 않음. 프로필 이미지 업로드는
+  // 백엔드 명세에 아직 없어서, 선택한 이미지는 이 화면 안에서만
+  // 미리보기로 반영되고 서버에는 저장되지 않음.
+  // (별도 이미지 업로드 API가 생기면 연결해야 함)
   // ==================================================
 
   const handleSave = async () => {
@@ -141,44 +172,20 @@ function Profile() {
     setSaveError("");
 
     try {
-      const requestBody = {
+      await updateMyProfile({
+        nickname: editName,
+        introduction: editDesc,
+      });
+
+      // 응답 바디가 없어서, 화면에는 입력한 값을 그대로 반영
+      setProfile((prev) => ({
+        ...prev,
         name: editName,
         desc: editDesc,
-      };
-
-      // 이미지를 새로 선택한 경우에만 같이 보냄
-      if (editImgFile) {
-        requestBody.image =
-          editImgPreview;
-      }
-
-      const updated = await apiFetch(
-        "/api/users/me",
-        {
-          method: "PATCH",
-          body: JSON.stringify(
-            requestBody
-          ),
-        }
-      );
-
-      setProfile(updated);
-
-      // 다른 페이지에서 쓰는 currentUser도 같이 갱신
-      const currentUser =
-        JSON.parse(
-          localStorage.getItem(
-            "currentUser"
-          )
-        ) || {};
-
-      localStorage.setItem(
-        "currentUser",
-        JSON.stringify({
-          ...currentUser,
-          name: updated.name,
-        })
-      );
+        image: editImgFile
+          ? editImgPreview
+          : prev.image,
+      }));
 
       setShowModal(false);
     } catch (err) {
@@ -280,8 +287,6 @@ function Profile() {
           overflow: hidden;
           min-height: 0;
         }
-
-        /* 조명 */
         .lamp-wrap {
           position: absolute;
           top: 20px; right: 40px;
@@ -301,8 +306,6 @@ function Profile() {
           background: radial-gradient(ellipse, rgba(255,210,80,0.28) 0%, transparent 70%);
           pointer-events: none;
         }
-
-        /* 책 슬라이드 */
         .book-scroll {
           display: flex;
           align-items: flex-end;
@@ -315,25 +318,20 @@ function Profile() {
           -webkit-overflow-scrolling: touch;
           scrollbar-width: none;
           -ms-overflow-style: none;
-          /* 위쪽 여유 */
           padding-top: 60px;
         }
         .book-scroll::-webkit-scrollbar { display: none; }
-
         .book-item {
           flex-shrink: 0;
           cursor: pointer;
-          transition: transform 0.22s cubic-bezier(.34,1.56,.64,1),
-                      filter 0.2s ease;
+          transition: transform 0.22s cubic-bezier(.34,1.56,.64,1), filter 0.2s ease;
         }
         .book-item:hover {
           transform: translateY(-12px) scale(1.05);
           filter: brightness(1.1) drop-shadow(0 10px 14px rgba(80,60,20,0.25));
           z-index: 10;
         }
-        .book-item:active {
-          transform: translateY(-4px) scale(0.97);
-        }
+        .book-item:active { transform: translateY(-4px) scale(0.97); }
         .book-spine {
           border-radius: 5px 5px 0 0;
           display: flex;
@@ -467,16 +465,18 @@ function Profile() {
           </div>
         )}
 
-        {!loading && profile && (
+        {!loading && !error && (
           <>
             {/* 프로필 */}
             <div className="profile-top">
               <div className="profile-image">
-                <img src={profile.image} alt="프로필" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                {profile.image && (
+                  <img src={profile.image} alt="프로필" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                )}
               </div>
               <div className="profile-info">
                 <div className="profile-name">
-                  {profile.name}
+                  {profile.name || "닉네임을 설정해주세요"}
                   <button className="pencil-btn" onClick={openModal} aria-label="프로필 수정">✏️</button>
                 </div>
                 <div className="follow-wrap">
@@ -522,7 +522,7 @@ function Profile() {
                   const bg = colors[index % colors.length];
                   return (
                     <div
-                      key={index}
+                      key={book.bookId ?? index}
                       className="book-item"
                       onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
                     >
@@ -553,7 +553,9 @@ function Profile() {
             {/* 프로필 사진 */}
             <div className="modal-avatar-wrap">
               <div className="modal-avatar" onClick={() => fileInputRef.current.click()}>
-                <img src={editImgPreview} alt="프로필 미리보기" />
+                {editImgPreview && (
+                  <img src={editImgPreview} alt="프로필 미리보기" />
+                )}
                 <div className="avatar-overlay">📷</div>
               </div>
               <input
@@ -565,14 +567,14 @@ function Profile() {
               />
             </div>
 
-            {/* 이름 */}
-            <div className="modal-label">이름</div>
+            {/* 이름(닉네임) */}
+            <div className="modal-label">닉네임</div>
             <input
               className="modal-input"
               type="text"
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              placeholder="이름을 입력하세요"
+              placeholder="닉네임을 입력하세요"
             />
 
             {/* 소개글 */}
@@ -584,6 +586,12 @@ function Profile() {
               onChange={(e) => setEditDesc(e.target.value)}
               placeholder="소개글을 입력하세요"
             />
+
+            {editImgFile && (
+              <div style={{ marginTop: "8px", fontSize: "12px", color: "#e0a44d" }}>
+                ⚠️ 프로필 이미지는 아직 서버에 저장되는 기능이 없어서, 화면 미리보기로만 반영돼요.
+              </div>
+            )}
 
             {saveError && (
               <div style={{ marginTop: "10px", color: "#e57373", fontSize: "13px" }}>

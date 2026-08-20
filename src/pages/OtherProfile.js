@@ -2,10 +2,16 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { apiFetch } from "../api/api";
 
-const heights = [180, 220, 160, 200, 175, 215, 165, 190, 205];
-const colors  = ["#7bc142","#a8d84e","#5aab35","#c5e87a","#68b83e","#b2de5f","#4e9e2f","#d4f09a","#89c94f"];
+import {
+  getFollowers,
+  getFollowings,
+  follow,
+} from "../api/api";
+
+// heights/colors(책 스파인 랜덤 색상)는 Profile.js에서만 씀.
+// 이 화면은 타인의 읽은 책 목록을 조회하는 API가 없어서
+// 책장이 항상 비어있으므로 여기선 사용하지 않음.
 
 function OtherProfile() {
   const navigate = useNavigate();
@@ -14,38 +20,37 @@ function OtherProfile() {
   // ==================================================
   // ★ 다른 사람 프로필 (백엔드 연동)
   //
-  // 기존: DUMMY_USERS 객체에서 이름으로 찾아옴
+  // ⚠️ 중요: 백엔드 명세서에 "특정 회원의 프로필(닉네임/소개/
+  // 이미지)을 조회"하는 GET API가 존재하지 않음.
+  // (PATCH /api/members/me/profile은 "내" 프로필 수정 전용)
   //
-  // 변경: userId로 백엔드에서 조회
-  //
-  // Community.js / MeetingRoom.js 등에서
-  // navigate("/other-profile", { state: { userId: 3 } })
-  // 형태로 userId를 넘겨줘야 함
-  //
-  // 요청: GET /api/users/:userId
-  // 응답: {
-  //   "name": "민지",
-  //   "image": "/images/민지프로필.png",
-  //   "desc": "함께 책 읽고 이야기하는 걸 좋아해요 📖",
-  //   "followers": 23,
-  //   "following": 15,
-  //   "isFollowing": false,
-  //   "books": [
-  //     { "title": "노르웨이의 숲", "review": "..." }
-  //   ]
-  // }
+  // 그래서 지금 이 화면에서 실제로 연결 가능한 건:
+  // - 팔로워/팔로잉 수
+  //   GET /api/members/{memberId}/followers → [{ memberId, nickname, introduction }]
+  //   GET /api/members/{memberId}/followings → 위와 동일 형식
+  //   (원한다면 여기서 nickname/introduction을 팔로워 카드용으로 쓸 수는 있지만,
+  //   "이 사람 자신"의 닉네임/소개가 필요한 이 화면 목적에는 맞지 않음)
+  // - 팔로우
+  //   POST /api/members/{followingId}/follow (성공 시 200, 바디 없음)
+  //   ⚠️ 언팔로우(취소) API는 현재 백엔드에 없음 → 한번 팔로우하면
+  //   이 화면에서 되돌릴 방법이 없어서, 버튼을 다시 누를 수 없게 처리함
+  // - 이름 / 소개 / 프로필 이미지 / 읽은 책 목록
+  //   → 조회할 방법이 없음 (백엔드에 GET 프로필 조회 API 추가 필요)
   // ==================================================
 
   const userId = location.state?.userId;
 
-  const [profile, setProfile] = useState(null);
+  const [followers, setFollowers] = useState(0);
+  const [following, setFollowing] = useState(0);
+  const [isFollowing, setIsFollowing] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let ignore = false;
 
-    const fetchProfile = async () => {
+    const fetchFollowCounts = async () => {
       if (!userId) {
         setError("사용자 정보를 찾을 수 없어요.");
         setLoading(false);
@@ -56,18 +61,18 @@ function OtherProfile() {
       setError("");
 
       try {
-        const data = await apiFetch(
-          `/api/users/${userId}`,
-          { method: "GET" }
-        );
+        const [followerList, followingList] =
+          await Promise.all([
+            getFollowers(userId),
+            getFollowings(userId),
+          ]);
 
         if (!ignore) {
-          setProfile(data);
-          setIsFollowing(!!data.isFollowing);
-          setFollowers(data.followers ?? 0);
+          setFollowers((followerList || []).length);
+          setFollowing((followingList || []).length);
         }
       } catch (err) {
-        console.error("프로필 조회 오류:", err);
+        console.error("팔로우 정보 조회 오류:", err);
 
         if (!ignore) {
           setError("프로필을 불러오지 못했습니다.");
@@ -79,56 +84,42 @@ function OtherProfile() {
       }
     };
 
-    fetchProfile();
+    fetchFollowCounts();
 
     return () => {
       ignore = true;
     };
   }, [userId]);
 
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [followers,   setFollowers]   = useState(0);
   const [followLoading, setFollowLoading] = useState(false);
 
   // ==================================================
-  // ★ 팔로우 토글 (백엔드 연동)
+  // ★ 팔로우 (백엔드 연동)
   //
-  // 요청: POST /api/users/:userId/follow
-  // 응답: { "isFollowing": true, "followers": 24 }
+  // POST /api/members/{followingId}/follow
+  // 응답: 없음(200)
+  //
+  // 언팔로우 API가 없어서 토글이 아니라 "1회성" 팔로우로만 동작.
+  // 이미 팔로우한 상태면 버튼을 비활성화함.
   // ==================================================
 
   const handleFollow = async () => {
-    if (followLoading || !userId) {
+    if (followLoading || !userId || isFollowing) {
       return;
     }
 
     setFollowLoading(true);
 
-    // 우선 화면은 즉시 반응하게 낙관적으로 바꿔둠
-    const nextFollowing = !isFollowing;
-    setIsFollowing(nextFollowing);
-    setFollowers((n) => (nextFollowing ? n + 1 : n - 1));
-
     try {
-      const data = await apiFetch(
-        `/api/users/${userId}/follow`,
-        { method: "POST" }
-      );
+      await follow(userId);
 
-      // 서버가 정확한 값을 내려주면 그걸로 덮어씀
-      if (typeof data?.isFollowing === "boolean") {
-        setIsFollowing(data.isFollowing);
-      }
-
-      if (typeof data?.followers === "number") {
-        setFollowers(data.followers);
-      }
+      setIsFollowing(true);
+      setFollowers((n) => n + 1);
     } catch (err) {
       console.error("팔로우 요청 오류:", err);
-
-      // 실패하면 낙관적으로 바꿨던 걸 되돌림
-      setIsFollowing((prev) => !prev);
-      setFollowers((n) => (nextFollowing ? n - 1 : n + 1));
+      alert(
+        err.message || "팔로우 요청 중 오류가 발생했습니다."
+      );
     } finally {
       setFollowLoading(false);
     }
@@ -340,27 +331,28 @@ function OtherProfile() {
           </div>
         )}
 
-        {!loading && profile && (
+        {!loading && !error && (
           <>
             {/* 프로필 — Profile.js .profile-top과 동일 구조 */}
             <div className="profile-top">
-              <div className="profile-image">
-                <img
-                  src={profile.image}
-                  alt="프로필"
-                  style={{ width:"100%", height:"100%", objectFit:"cover" }}
-                  onError={e => { e.target.style.display = "none"; }}
-                />
-              </div>
+              <div className="profile-image" />
               <div className="profile-info">
-                <div className="profile-name">{profile.name}</div>
+                {/*
+                  ⚠️ 닉네임을 조회할 API가 없어서 표시할 수 없음.
+                  Community.js / MeetingRoom.js 등에서 navigate 할 때
+                  state로 nickname을 같이 넘겨주면 최소한의 이름만
+                  임시로 보여줄 수 있음 (그 전까지는 비워둠)
+                */}
+                <div className="profile-name">
+                  {location.state?.nickname || "닉네임 정보 없음"}
+                </div>
                 <div className="follow-wrap">
                   <div className="follow-box">
                     <div className="follow-num">{followers}</div>
                     <div className="follow-text">팔로워</div>
                   </div>
                   <div className="follow-box">
-                    <div className="follow-num">{profile.following}</div>
+                    <div className="follow-num">{following}</div>
                     <div className="follow-text">팔로잉</div>
                   </div>
                 </div>
@@ -368,7 +360,7 @@ function OtherProfile() {
                   <button
                     className={`follow-action-btn ${isFollowing ? "on" : "off"}`}
                     onClick={handleFollow}
-                    disabled={followLoading}
+                    disabled={followLoading || isFollowing}
                   >
                     {isFollowing ? "팔로잉 ✓" : "팔로우"}
                   </button>
@@ -376,11 +368,11 @@ function OtherProfile() {
               </div>
             </div>
 
-            {/* 소개 */}
-            <div className="profile-desc">{profile.desc}</div>
+            {/* 소개 — 조회 API가 없어 비워둠 */}
+            <div className="profile-desc" />
             <div className="divider" />
 
-            {/* 책장 */}
+            {/* 책장 — 타인의 읽은 책 목록을 조회하는 API가 없어 비워둠 */}
             <div className="bookshelf-area">
               <div className="lamp-wrap">
                 <div className="lamp-rod" />
@@ -396,26 +388,7 @@ function OtherProfile() {
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
                 onMouseLeave={onMouseUp}
-              >
-                {(profile.books || []).map((book, index) => (
-                  <div
-                    key={index}
-                    className="book-item"
-                    onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
-                  >
-                    <div
-                      className="book-spine"
-                      style={{
-                        width: "48px",
-                        height: `${heights[index % heights.length]}px`,
-                        background: colors[index % colors.length],
-                      }}
-                    >
-                      {book.title}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              />
 
               <div className="shelf-board" />
             </div>

@@ -2,7 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch } from "../api/api";
+
+import {
+  getBookClubs,
+  searchBooks,
+  registerBook,
+  createBookClub,
+  joinBookClub,
+  statusLabel,
+  typeToMood,
+  moodToType,
+} from "../api/api";
 
 function Community() {
   const navigate = useNavigate();
@@ -10,21 +20,16 @@ function Community() {
   // ==================================================
   // 모임 목록
   //
-  // ★ 백엔드에서 조회 (백엔드 연동)
+  // ★ GET /api/book-clubs (백엔드 실제 엔드포인트)
   //
-  // 요청: GET /api/rooms
-  // 응답: [
-  //   {
-  //     "id": 1,
-  //     "title": "상실과 성장에 대하여",
-  //     "book": "노르웨이의 숲",
-  //     "time": "오늘 19:00",
-  //     "members": "4 / 6명",
-  //     "status": "모임중",
-  //     "mood": "badge1"
-  //   },
-  //   ...
-  // ]
+  // 응답: [{
+  //   clubId, name, bookId, bookName, bookCoverImageUrl,
+  //   date, time, currentMemberCount, maxCapacity,
+  //   status, type, role
+  // }]
+  //
+  // 화면에서 쓰는 필드명(title/book/time/members/status/mood)에
+  // 맞춰 매핑해서 씀
   // ==================================================
 
   const [meetings, setMeetings] =
@@ -36,17 +41,25 @@ function Community() {
   const [listError, setListError] =
     useState("");
 
+  const mapClub = (club) => ({
+    id: club.clubId,
+    title: club.name,
+    book: club.bookName,
+    time: `${club.date} ${club.time}`,
+    members: `${club.currentMemberCount} / ${club.maxCapacity}명`,
+    status: statusLabel(club.status),
+    mood: typeToMood(club.type),
+    role: club.role, // "HOST" | "PARTICIPANT" | null(미가입)
+  });
+
   const fetchMeetings = async () => {
     setListLoading(true);
     setListError("");
 
     try {
-      const data = await apiFetch(
-        "/api/rooms",
-        { method: "GET" }
-      );
+      const data = await getBookClubs();
 
-      setMeetings(data || []);
+      setMeetings((data || []).map(mapClub));
     } catch (err) {
       console.error(
         "모임 목록 조회 오류:",
@@ -63,6 +76,9 @@ function Community() {
 
   useEffect(() => {
     fetchMeetings();
+    // 마운트 시 1회만 실행. fetchMeetings는 렌더마다 새로 만들어지는
+    // 함수라 deps에 넣으면 계속 재실행되므로 의도적으로 제외함.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ==================================================
@@ -74,13 +90,68 @@ function Community() {
 
   // ==================================================
   // 책 검색
+  //
+  // ★ GET /api/books/search?keyword= (백엔드 실제 엔드포인트)
+  //
+  // 응답: [{ isbn13, name, writer, coverImageUrl }]
+  // (기존 로컬 하드코딩 books 배열 → 실제 검색 API로 교체)
   // ==================================================
 
   const [search, setSearch] =
     useState("");
 
+  const [searchResults, setSearchResults] =
+    useState([]);
+
+  const [searchLoading, setSearchLoading] =
+    useState(false);
+
+  useEffect(() => {
+    if (search.trim() === "") {
+      setSearchResults([]);
+      return;
+    }
+
+    let ignore = false;
+
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+
+      try {
+        const data = await searchBooks(
+          search.trim()
+        );
+
+        if (!ignore) {
+          setSearchResults(data || []);
+        }
+      } catch (err) {
+        console.error(
+          "책 검색 오류:",
+          err
+        );
+
+        if (!ignore) {
+          setSearchResults([]);
+        }
+      } finally {
+        if (!ignore) {
+          setSearchLoading(false);
+        }
+      }
+    }, 350); // 디바운스
+
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+  }, [search]);
+
   // ==================================================
   // 새 모임 정보
+  //
+  // selectedBook: { isbn13, name, writer, coverImageUrl, bookId }
+  // → 책 선택 시점에 POST /api/books로 등록해서 bookId까지 미리 받아둠
   // ==================================================
 
   const [newMeeting, setNewMeeting] =
@@ -92,6 +163,40 @@ function Community() {
       people: 6,
       mood: "badge1",
     });
+
+  const [
+    bookRegisterLoading,
+    setBookRegisterLoading,
+  ] = useState(false);
+
+  const handleSelectBook = async (book) => {
+    setBookRegisterLoading(true);
+
+    try {
+      const bookId = await registerBook(
+        book.isbn13
+      );
+
+      setNewMeeting((prev) => ({
+        ...prev,
+        selectedBook: { ...book, bookId },
+      }));
+
+      setSearch("");
+      setSearchResults([]);
+    } catch (err) {
+      console.error(
+        "책 등록 오류:",
+        err
+      );
+
+      alert(
+        "책 정보를 등록하지 못했습니다. 다시 시도해주세요."
+      );
+    } finally {
+      setBookRegisterLoading(false);
+    }
+  };
 
   // ==================================================
   // ★ 모임 생성 요청 중 상태
@@ -106,71 +211,15 @@ function Community() {
     useState("");
 
   // ==================================================
-  // 책 데이터
+  // 모임 생성
   //
-  // ★ 책 검색은 지금 로컬 배열 기준
-  // 나중에 실제 도서 검색 API로 교체 가능
-  // (예: GET /api/books?query=검색어)
-  // ==================================================
-
-  const books = [
-    {
-      title: "노르웨이의 숲",
-      author: "무라카미 하루키",
-    },
-
-    {
-      title: "데미안",
-      author: "헤르만 헤세",
-    },
-
-    {
-      title: "어린왕자",
-      author: "생텍쥐페리",
-    },
-
-    {
-      title: "1984",
-      author: "조지 오웰",
-    },
-
-    {
-      title: "해변의 카프카",
-      author: "무라카미 하루키",
-    },
-  ];
-
-  // ==================================================
-  // 책 검색 결과
-  // ==================================================
-
-  const filteredBooks =
-    search.trim() === ""
-      ? []
-      : books.filter((book) =>
-          book.title
-            .toLowerCase()
-            .includes(
-              search.toLowerCase()
-            )
-        );
-
-  // ==================================================
-  // 모임 생성 (백엔드 연동)
+  // ★ POST /api/book-clubs (백엔드 실제 엔드포인트)
   //
-  // 요청: POST /api/rooms
-  // {
-  //   "title": "모임 이름",
-  //   "bookTitle": "노르웨이의 숲",
-  //   "date": "2026-05-30",
-  //   "time": "19:00",
-  //   "maxPeople": 6,
-  //   "mood": "badge1"
-  // }
+  // 요청: { name, bookId, date, time, maxCapacity, type }
+  // 응답: 생성된 clubId (순수 숫자, 전체 객체가 아님)
   //
-  // 응답: 생성된 모임 객체 (meetings 배열과 같은 형태)
-  //
-  // → 로그인한 사용자를 백엔드가 자동으로 hostId로 저장
+  // → 응답이 숫자뿐이라 목록에 바로 이어붙일 수 없어서
+  //   생성 성공 후 목록을 다시 조회함
   // ==================================================
 
   const addMeeting = async () => {
@@ -185,6 +234,14 @@ function Community() {
       return;
     }
 
+    if (!newMeeting.date || !newMeeting.time) {
+      alert(
+        "모임 날짜와 시간을 입력해주세요."
+      );
+
+      return;
+    }
+
     if (createLoading) {
       return;
     }
@@ -193,44 +250,16 @@ function Community() {
     setCreateError("");
 
     try {
-      const created = await apiFetch(
-        "/api/rooms",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            title:
-              newMeeting.meetingName,
+      await createBookClub({
+        name: newMeeting.meetingName,
+        bookId: newMeeting.selectedBook.bookId,
+        date: newMeeting.date,
+        time: newMeeting.time,
+        maxCapacity: newMeeting.people,
+        type: moodToType(newMeeting.mood),
+      });
 
-            bookTitle:
-              newMeeting.selectedBook
-                .title,
-
-            date: newMeeting.date,
-
-            time: newMeeting.time,
-
-            maxPeople:
-              newMeeting.people,
-
-            mood: newMeeting.mood,
-          }),
-        }
-      );
-
-      // ------------------------------------------
-      // 서버가 만들어준 최신 목록을 다시 받아오는 게
-      // 제일 정확하지만, 응답으로 생성된 방 정보를
-      // 바로 주면 그걸 목록에 추가해서 즉시 반영
-      // ------------------------------------------
-
-      if (created) {
-        setMeetings((prev) => [
-          ...prev,
-          created,
-        ]);
-      } else {
-        await fetchMeetings();
-      }
+      await fetchMeetings();
 
       setShowModal(false);
       setSearch("");
@@ -255,6 +284,54 @@ function Community() {
       );
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  // ==================================================
+  // 모임 참여
+  //
+  // ★ POST /api/book-clubs/{clubId}/join
+  //
+  // role이 이미 있으면(HOST/PARTICIPANT) 가입된 상태이므로
+  // join을 다시 호출하지 않고 바로 입장.
+  // role이 null(미가입)이면 join 호출 후 입장.
+  // (GET /api/book-clubs/{clubId} 상세 조회는 가입 회원만
+  // 가능하므로, 미가입 상태로 방에 들어가면 409가 남)
+  // ==================================================
+
+  const [joinLoadingId, setJoinLoadingId] =
+    useState(null);
+
+  const handleJoin = async (meeting) => {
+    if (joinLoadingId) {
+      return;
+    }
+
+    try {
+      if (!meeting.role) {
+        setJoinLoadingId(meeting.id);
+        await joinBookClub(meeting.id);
+      }
+
+      navigate("/meeting", {
+        state: {
+          roomId: meeting.id,
+          title: meeting.title,
+          mood: meeting.mood,
+        },
+      });
+    } catch (err) {
+      console.error(
+        "모임 참여 오류:",
+        err
+      );
+
+      alert(
+        err.message ||
+          "모임 참여 중 오류가 발생했습니다."
+      );
+    } finally {
+      setJoinLoadingId(null);
     }
   };
 
@@ -412,38 +489,18 @@ function Community() {
 
             <button
               className="join-btn"
-              onClick={() => {
-
-                // ==================================================
-                // roomId만 넘기고,
-                // MeetingRoom에서 roomId로
-                // 방 입장 API를 호출해서
-                // role(HOST / PARTICIPANT)을 받아옴
-                //
-                // title, mood는 API 응답을 받기 전
-                // 화면에 바로 보여주기 위한
-                // 임시 표시용으로만 같이 전달함
-                // ==================================================
-
-                navigate(
-                  "/meeting",
-                  {
-                    state: {
-                      roomId:
-                        meeting.id,
-
-                      title:
-                        meeting.title,
-
-                      mood:
-                        meeting.mood,
-                    },
-                  }
-                );
-
-              }}
+              disabled={
+                joinLoadingId === meeting.id
+              }
+              onClick={() =>
+                handleJoin(meeting)
+              }
             >
-              참여하기
+              {joinLoadingId === meeting.id
+                ? "참여하는 중..."
+                : meeting.role
+                ? "입장하기"
+                : "참여하기"}
             </button>
 
           </div>
@@ -506,44 +563,58 @@ function Community() {
 
             </div>
 
+            {searchLoading && (
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#888",
+                  padding: "6px 2px",
+                }}
+              >
+                검색 중...
+              </div>
+            )}
 
             {/* ------------------------------------------
                 검색 결과
             ------------------------------------------ */}
 
-            {filteredBooks.map(
-              (book, index) => (
+            {searchResults.map(
+              (book) => (
 
                 <div
-                  key={index}
+                  key={book.isbn13}
                   className="search-item"
-                  onClick={() => {
-
-                    setNewMeeting({
-                      ...newMeeting,
-
-                      selectedBook:
-                        book,
-                    });
-
-                    setSearch("");
-
-                  }}
+                  onClick={() =>
+                    handleSelectBook(book)
+                  }
                 >
 
                   <div className="search-cover">
-                    📚
+                    {book.coverImageUrl ? (
+                      <img
+                        src={book.coverImageUrl}
+                        alt={book.name}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                      />
+                    ) : (
+                      "📚"
+                    )}
                   </div>
 
 
                   <div>
 
                     <div className="book-name">
-                      {book.title}
+                      {book.name}
                     </div>
 
                     <div className="book-author">
-                      {book.author}
+                      {book.writer}
                     </div>
 
                   </div>
@@ -563,7 +634,28 @@ function Community() {
               <div className="book-result">
 
                 <div className="book-cover">
-                  📚
+                  {newMeeting.selectedBook
+                    .coverImageUrl ? (
+                    <img
+                      src={
+                        newMeeting
+                          .selectedBook
+                          .coverImageUrl
+                      }
+                      alt={
+                        newMeeting
+                          .selectedBook
+                          .name
+                      }
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  ) : (
+                    "📚"
+                  )}
                 </div>
 
 
@@ -574,7 +666,7 @@ function Community() {
                     {
                       newMeeting
                         .selectedBook
-                        .title
+                        .name
                     }
 
                   </div>
@@ -585,7 +677,7 @@ function Community() {
                     {
                       newMeeting
                         .selectedBook
-                        .author
+                        .writer
                     }
 
                   </div>
@@ -594,6 +686,18 @@ function Community() {
 
               </div>
 
+            )}
+
+            {bookRegisterLoading && (
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#888",
+                  padding: "6px 2px",
+                }}
+              >
+                책 정보를 등록하는 중...
+              </div>
             )}
 
 
