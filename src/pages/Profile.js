@@ -47,6 +47,21 @@ function Profile() {
     books: [],
   });
 
+  // ==================================================
+  // ★ 팔로워/팔로잉 "목록" 자체 (숫자 말고 실제 명단)
+  //
+  // GET /api/members/{memberId}/followers, /followings
+  // → [{ memberId, nickname, introduction }]
+  //
+  // 지금까지는 이 배열의 length만 써서 숫자만 보여줬는데,
+  // 명단 자체는 모달로 보여줄 수 있게 원본 배열도 같이 저장
+  // ==================================================
+
+  const [followerList, setFollowerList] = useState([]);
+  const [followingList, setFollowingList] = useState([]);
+
+  const [listModal, setListModal] = useState(null); // "followers" | "followings" | null
+
   const [loading, setLoading] =
     useState(true);
 
@@ -70,6 +85,9 @@ function Profile() {
           getFollowings(memberId),
           getMyBookList(),
         ]);
+
+      setFollowerList(followers || []);
+      setFollowingList(followings || []);
 
       setProfile((prev) => ({
         ...prev,
@@ -480,11 +498,19 @@ function Profile() {
                   <button className="pencil-btn" onClick={openModal} aria-label="프로필 수정">✏️</button>
                 </div>
                 <div className="follow-wrap">
-                  <div className="follow-box">
+                  <div
+                    className="follow-box"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setListModal("followers")}
+                  >
                     <div className="follow-num">{profile.followers}</div>
                     <div className="follow-text">팔로워</div>
                   </div>
-                  <div className="follow-box">
+                  <div
+                    className="follow-box"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setListModal("followings")}
+                  >
                     <div className="follow-num">{profile.following}</div>
                     <div className="follow-text">팔로잉</div>
                   </div>
@@ -604,6 +630,92 @@ function Profile() {
               <button className="btn-cancel" onClick={() => setShowModal(false)}>취소</button>
               <button className="btn-save" onClick={handleSave} disabled={saveLoading}>
                 {saveLoading ? "저장 중..." : "저장하기"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 팔로워 / 팔로잉 목록 모달 */}
+      {listModal && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) =>
+            e.target === e.currentTarget && setListModal(null)
+          }
+        >
+          <div className="modal-sheet">
+            <div className="modal-title">
+              {listModal === "followers" ? "팔로워" : "팔로잉"}
+            </div>
+
+            {(listModal === "followers"
+              ? followerList
+              : followingList
+            ).length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: "13px",
+                  color: "#888",
+                  padding: "20px 0",
+                }}
+              >
+                {listModal === "followers"
+                  ? "아직 팔로워가 없어요."
+                  : "아직 팔로우한 사람이 없어요."}
+              </div>
+            )}
+
+            <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+              {(listModal === "followers"
+                ? followerList
+                : followingList
+              ).map((person) => (
+                <div
+                  key={person.memberId}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "10px 4px",
+                    borderBottom: "1px solid #f0f0f0",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => {
+                    setListModal(null);
+                    navigate("/other-profile", {
+                      state: {
+                        userId: person.memberId,
+                        nickname: person.nickname,
+                      },
+                    });
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      borderRadius: "50%",
+                      background: "#eef7da",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontSize: "14px", fontWeight: "700" }}>
+                      {person.nickname}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#888" }}>
+                      {person.introduction}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn-cancel" onClick={() => setListModal(null)}>
+                닫기
               </button>
             </div>
           </div>

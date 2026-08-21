@@ -21,9 +21,12 @@ import Tesseract from "tesseract.js";
 import {
   searchBooks,
   registerBook,
+  addToMyBookList,
   writeNote,
+  getNotes,
   generateAiNote,
   getAiNote,
+  updateAiNote,
 } from "../api/api";
 
 function AIWrite() {
@@ -53,6 +56,65 @@ function AIWrite() {
     bookRegisterLoading,
     setBookRegisterLoading,
   ] = useState(false);
+
+  // ==================================================
+  // ★ 내가 이 책에 이미 써둔 독서록 목록
+  //
+  // GET /api/notes/books/{bookId}
+  // → [{ noteId, phrase, feeling }]
+  //
+  // 책을 선택하면 이전에 적어둔 구절/느낌들을 미리 보여줌
+  // ==================================================
+
+  const [previousNotes, setPreviousNotes] =
+    useState([]);
+
+  const [
+    previousNotesLoading,
+    setPreviousNotesLoading,
+  ] = useState(false);
+
+  useEffect(() => {
+    if (!selectedBook?.bookId) {
+      setPreviousNotes([]);
+      return;
+    }
+
+    let ignore = false;
+
+    const fetchPreviousNotes = async () => {
+      setPreviousNotesLoading(true);
+
+      try {
+        const data = await getNotes(
+          selectedBook.bookId
+        );
+
+        if (!ignore) {
+          setPreviousNotes(data || []);
+        }
+      } catch (error) {
+        console.error(
+          "독서록 목록 조회 오류:",
+          error
+        );
+
+        if (!ignore) {
+          setPreviousNotes([]);
+        }
+      } finally {
+        if (!ignore) {
+          setPreviousNotesLoading(false);
+        }
+      }
+    };
+
+    fetchPreviousNotes();
+
+    return () => {
+      ignore = true;
+    };
+  }, [selectedBook?.bookId]);
 
   useEffect(() => {
     if (keyword.trim() === "") {
@@ -148,6 +210,30 @@ function AIWrite() {
     generateError,
     setGenerateError,
   ] = useState("");
+
+  // ==================================================
+  // ★ 생성된 AI 독후감 id / 수정 상태
+  //
+  // PATCH /api/notes/ai-notes/{aiNoteId} 로 직접 수정 가능
+  // (본인 소유 아니면 403)
+  // ==================================================
+
+  const [aiNoteId, setAiNoteId] =
+    useState(null);
+
+  const [isEditingAiNote, setIsEditingAiNote] =
+    useState(false);
+
+  const [editedAiText, setEditedAiText] =
+    useState("");
+
+  const [
+    aiNoteSaveLoading,
+    setAiNoteSaveLoading,
+  ] = useState(false);
+
+  const [aiNoteSaveError, setAiNoteSaveError] =
+    useState("");
 
   // ==================================================
   // OCR 관련
@@ -446,6 +532,12 @@ function AIWrite() {
         feeling,
       });
 
+      // 방금 쓴 독서록을 목록에도 즉시 반영
+      setPreviousNotes((prev) => [
+        ...prev,
+        { phrase: ocrText, feeling },
+      ]);
+
       await generateAiNote(selectedBook.bookId);
 
       const aiNote = await getAiNote(
@@ -453,7 +545,26 @@ function AIWrite() {
       );
 
       setGeneratedText(aiNote?.content || "");
+      setAiNoteId(aiNote?.aiNoteId ?? null);
       setGenerated(true);
+
+      // ==================================================
+      // ★ 독후감을 완성했다는 건 이 책을 다 읽었다는 뜻이므로
+      // "내가 읽은 책 목록"에도 추가
+      //
+      // POST /api/books/{bookId}/my-list
+      // 이미 추가된 책이어도 실패해서 전체 플로우가 막히지
+      // 않도록 별도로 감싸서 실패는 조용히 무시함
+      // ==================================================
+
+      try {
+        await addToMyBookList(selectedBook.bookId);
+      } catch (addErr) {
+        console.warn(
+          "읽은 책 목록 추가 실패(이미 추가된 책일 수 있음):",
+          addErr
+        );
+      }
     } catch (error) {
       console.error(
         "AI 독후감 생성 오류:",
@@ -466,6 +577,51 @@ function AIWrite() {
       );
     } finally {
       setGenerateLoading(false);
+    }
+  };
+
+  // ==================================================
+  // ★ AI 독후감 직접 수정
+  //
+  // PATCH /api/notes/ai-notes/{aiNoteId} { newAiContent }
+  // ==================================================
+
+  const startEditAiNote = () => {
+    setEditedAiText(generatedText);
+    setAiNoteSaveError("");
+    setIsEditingAiNote(true);
+  };
+
+  const cancelEditAiNote = () => {
+    setIsEditingAiNote(false);
+    setAiNoteSaveError("");
+  };
+
+  const handleSaveAiNoteEdit = async () => {
+    if (!aiNoteId || aiNoteSaveLoading) {
+      return;
+    }
+
+    setAiNoteSaveLoading(true);
+    setAiNoteSaveError("");
+
+    try {
+      await updateAiNote(aiNoteId, editedAiText);
+
+      setGeneratedText(editedAiText);
+      setIsEditingAiNote(false);
+    } catch (error) {
+      console.error(
+        "AI 독후감 수정 오류:",
+        error
+      );
+
+      setAiNoteSaveError(
+        error.message ||
+          "독후감 수정 중 오류가 발생했습니다."
+      );
+    } finally {
+      setAiNoteSaveLoading(false);
     }
   };
 
@@ -609,6 +765,66 @@ function AIWrite() {
             책 정보를 등록하는 중...
           </div>
         )}
+
+        {/* 이 책에 이전에 써둔 독서록들 */}
+
+        {previousNotesLoading && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#888",
+              padding: "6px 2px",
+            }}
+          >
+            이전 독서록을 불러오는 중...
+          </div>
+        )}
+
+        {!previousNotesLoading &&
+          previousNotes.length > 0 && (
+            <div
+              style={{
+                marginTop: "12px",
+                borderTop: "1px solid #eee",
+                paddingTop: "10px",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "12px",
+                  fontWeight: "700",
+                  color: "#666",
+                  marginBottom: "6px",
+                }}
+              >
+                📚 이 책에 남긴 독서록
+              </div>
+
+              {previousNotes.map((note, idx) => (
+                <div
+                  key={note.noteId ?? idx}
+                  style={{
+                    fontSize: "12px",
+                    color: "#777",
+                    padding: "6px 0",
+                    borderBottom:
+                      idx < previousNotes.length - 1
+                        ? "1px dashed #eee"
+                        : "none",
+                  }}
+                >
+                  {note.phrase && (
+                    <div>“{note.phrase}”</div>
+                  )}
+                  {note.feeling && (
+                    <div style={{ marginTop: "2px" }}>
+                      {note.feeling}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
       </div>
 
       {/* 인상 깊은 구절 */}
@@ -743,13 +959,88 @@ function AIWrite() {
 
       {generated && (
         <div className="result-card">
-          <div className="result-title">
-            ✨ AI 독후감
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div className="result-title">
+              ✨ AI 독후감
+            </div>
+
+            {!isEditingAiNote && aiNoteId && (
+              <button
+                type="button"
+                onClick={startEditAiNote}
+                style={{
+                  border: "none",
+                  background: "none",
+                  color: "#5aab35",
+                  fontSize: "12px",
+                  fontWeight: "700",
+                  cursor: "pointer",
+                }}
+              >
+                ✏️ 수정
+              </button>
+            )}
           </div>
 
-          <div className="result-content">
-            {generatedText}
-          </div>
+          {isEditingAiNote ? (
+            <>
+              <textarea
+                className="write-textarea big"
+                value={editedAiText}
+                onChange={(e) =>
+                  setEditedAiText(e.target.value)
+                }
+              ></textarea>
+
+              {aiNoteSaveError && (
+                <div
+                  style={{
+                    marginTop: "8px",
+                    color: "#e57373",
+                    fontSize: "13px",
+                  }}
+                >
+                  {aiNoteSaveError}
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  marginTop: "10px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={cancelEditAiNote}
+                  disabled={aiNoteSaveLoading}
+                >
+                  취소
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveAiNoteEdit}
+                  disabled={aiNoteSaveLoading}
+                >
+                  {aiNoteSaveLoading
+                    ? "저장 중..."
+                    : "저장"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="result-content">
+              {generatedText}
+            </div>
+          )}
         </div>
       )}
     </div>

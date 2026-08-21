@@ -44,6 +44,11 @@ function OtherProfile() {
   const [following, setFollowing] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
 
+  // 숫자 말고 실제 명단도 보여줄 수 있도록 원본 배열 보관
+  const [followerList, setFollowerList] = useState([]);
+  const [followingList, setFollowingList] = useState([]);
+  const [listModal, setListModal] = useState(null); // "followers" | "followings" | null
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -68,6 +73,8 @@ function OtherProfile() {
           ]);
 
         if (!ignore) {
+          setFollowerList(followerList || []);
+          setFollowingList(followingList || []);
           setFollowers((followerList || []).length);
           setFollowing((followingList || []).length);
         }
@@ -303,6 +310,45 @@ function OtherProfile() {
           box-shadow: 0 4px 10px rgba(120,80,30,0.22);
           flex-shrink: 0;
         }
+
+        /* 팔로워/팔로잉 목록 모달 */
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.35);
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          z-index: 100;
+        }
+        .modal-sheet {
+          width: 100%;
+          max-width: 480px;
+          background: #fff;
+          border-radius: 18px 18px 0 0;
+          padding: 18px 18px 14px;
+          box-sizing: border-box;
+        }
+        .modal-title {
+          font-size: 15px;
+          font-weight: 700;
+          margin-bottom: 10px;
+        }
+        .modal-actions {
+          margin-top: 14px;
+          display: flex;
+          justify-content: flex-end;
+        }
+        .modal-actions .btn-cancel {
+          border: none;
+          background: #f0f0f0;
+          color: #666;
+          padding: 8px 18px;
+          border-radius: 18px;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+        }
       `}</style>
 
       <div className="profile-page">
@@ -347,11 +393,19 @@ function OtherProfile() {
                   {location.state?.nickname || "닉네임 정보 없음"}
                 </div>
                 <div className="follow-wrap">
-                  <div className="follow-box">
+                  <div
+                    className="follow-box"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setListModal("followers")}
+                  >
                     <div className="follow-num">{followers}</div>
                     <div className="follow-text">팔로워</div>
                   </div>
-                  <div className="follow-box">
+                  <div
+                    className="follow-box"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setListModal("followings")}
+                  >
                     <div className="follow-num">{following}</div>
                     <div className="follow-text">팔로잉</div>
                   </div>
@@ -396,6 +450,92 @@ function OtherProfile() {
         )}
 
       </div>
+
+      {/* 팔로워 / 팔로잉 목록 모달 */}
+      {listModal && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) =>
+            e.target === e.currentTarget && setListModal(null)
+          }
+        >
+          <div className="modal-sheet">
+            <div className="modal-title">
+              {listModal === "followers" ? "팔로워" : "팔로잉"}
+            </div>
+
+            {(listModal === "followers"
+              ? followerList
+              : followingList
+            ).length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: "13px",
+                  color: "#888",
+                  padding: "20px 0",
+                }}
+              >
+                {listModal === "followers"
+                  ? "아직 팔로워가 없어요."
+                  : "아직 팔로우한 사람이 없어요."}
+              </div>
+            )}
+
+            <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+              {(listModal === "followers"
+                ? followerList
+                : followingList
+              ).map((person) => (
+                <div
+                  key={person.memberId}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "10px 4px",
+                    borderBottom: "1px solid #f0f0f0",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => {
+                    setListModal(null);
+                    navigate("/other-profile", {
+                      state: {
+                        userId: person.memberId,
+                        nickname: person.nickname,
+                      },
+                    });
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      borderRadius: "50%",
+                      background: "#eef7da",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontSize: "14px", fontWeight: "700" }}>
+                      {person.nickname}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#888" }}>
+                      {person.introduction}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn-cancel" onClick={() => setListModal(null)}>
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
