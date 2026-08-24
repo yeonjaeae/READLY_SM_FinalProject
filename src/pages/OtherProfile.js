@@ -4,14 +4,17 @@ import { useState, useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
+  getOtherProfile,
+  getMemberBookList,
   getFollowers,
   getFollowings,
   follow,
+  unfollow,
 } from "../api/api";
 
-// heights/colors(책 스파인 랜덤 색상)는 Profile.js에서만 씀.
-// 이 화면은 타인의 읽은 책 목록을 조회하는 API가 없어서
-// 책장이 항상 비어있으므로 여기선 사용하지 않음.
+// book-spine 색상/높이는 Profile.js와 동일하게 맞춤
+const heights = [180, 220, 160, 200, 175, 215, 165, 190, 205];
+const colors = ["#7bc142", "#a8d84e", "#5aab35", "#c5e87a", "#68b83e", "#b2de5f", "#4e9e2f", "#d4f09a", "#89c94f"];
 
 function OtherProfile() {
   const navigate = useNavigate();
@@ -20,33 +23,35 @@ function OtherProfile() {
   // ==================================================
   // ★ 다른 사람 프로필 (백엔드 연동)
   //
-  // ⚠️ 중요: 백엔드 명세서에 "특정 회원의 프로필(닉네임/소개/
-  // 이미지)을 조회"하는 GET API가 존재하지 않음.
-  // (PATCH /api/members/me/profile은 "내" 프로필 수정 전용)
+  // GET /api/members/{memberId}
+  // → { memberId, nickname, introduction, followerCount, followingCount, isFollowing }
+  // (본인 프로필과 달리 이메일은 내려주지 않음)
   //
-  // 그래서 지금 이 화면에서 실제로 연결 가능한 건:
-  // - 팔로워/팔로잉 수
-  //   GET /api/members/{memberId}/followers → [{ memberId, nickname, introduction }]
-  //   GET /api/members/{memberId}/followings → 위와 동일 형식
-  //   (원한다면 여기서 nickname/introduction을 팔로워 카드용으로 쓸 수는 있지만,
-  //   "이 사람 자신"의 닉네임/소개가 필요한 이 화면 목적에는 맞지 않음)
-  // - 팔로우
-  //   POST /api/members/{followingId}/follow (성공 시 200, 바디 없음)
-  //   ⚠️ 언팔로우(취소) API는 현재 백엔드에 없음 → 한번 팔로우하면
-  //   이 화면에서 되돌릴 방법이 없어서, 버튼을 다시 누를 수 없게 처리함
-  // - 이름 / 소개 / 프로필 이미지 / 읽은 책 목록
-  //   → 조회할 방법이 없음 (백엔드에 GET 프로필 조회 API 추가 필요)
+  // GET /api/books/members/{memberId}/list
+  // → [{ bookId, name, coverImageUrl }] (my-list와 동일 형식)
+  //
+  // 팔로우 / 언팔로우
+  //   POST   /api/members/{followingId}/follow   → 200, 바디 없음
+  //   DELETE /api/members/{followingId}/follow   → 200, 바디 없음
+  //   isFollowing으로 초기 상태를 정확히 알 수 있어 토글로 동작함
   // ==================================================
 
   const userId = location.state?.userId;
 
-  const [followers, setFollowers] = useState(0);
-  const [following, setFollowing] = useState(0);
+  const [profile, setProfile] = useState({
+    nickname: "",
+    introduction: "",
+    followers: 0,
+    following: 0,
+    books: [],
+  });
+
   const [isFollowing, setIsFollowing] = useState(false);
 
-  // 숫자 말고 실제 명단도 보여줄 수 있도록 원본 배열 보관
+  // 팔로워/팔로잉 "명단"은 모달을 열 때만 조회 (숫자는 profile에서 옴)
   const [followerList, setFollowerList] = useState([]);
   const [followingList, setFollowingList] = useState([]);
+  const [listLoading, setListLoading] = useState(false);
   const [listModal, setListModal] = useState(null); // "followers" | "followings" | null
 
   const [loading, setLoading] = useState(true);
@@ -55,7 +60,7 @@ function OtherProfile() {
   useEffect(() => {
     let ignore = false;
 
-    const fetchFollowCounts = async () => {
+    const fetchProfile = async () => {
       if (!userId) {
         setError("사용자 정보를 찾을 수 없어요.");
         setLoading(false);
@@ -66,20 +71,29 @@ function OtherProfile() {
       setError("");
 
       try {
-        const [followerList, followingList] =
-          await Promise.all([
-            getFollowers(userId),
-            getFollowings(userId),
-          ]);
+        const [other, books] = await Promise.all([
+          getOtherProfile(userId),
+          getMemberBookList(userId),
+        ]);
 
         if (!ignore) {
-          setFollowerList(followerList || []);
-          setFollowingList(followingList || []);
-          setFollowers((followerList || []).length);
-          setFollowing((followingList || []).length);
+          setProfile({
+            nickname: other?.nickname || "",
+            introduction: other?.introduction || "",
+            followers: other?.followerCount ?? 0,
+            following: other?.followingCount ?? 0,
+            // my-list와 동일 형식: { bookId, name, coverImageUrl }
+            books: (books || []).map((b) => ({
+              bookId: b.bookId,
+              title: b.name,
+              coverImageUrl: b.coverImageUrl,
+            })),
+          });
+
+          setIsFollowing(Boolean(other?.isFollowing));
         }
       } catch (err) {
-        console.error("팔로우 정보 조회 오류:", err);
+        console.error("프로필 조회 오류:", err);
 
         if (!ignore) {
           setError("프로필을 불러오지 못했습니다.");
@@ -91,41 +105,77 @@ function OtherProfile() {
       }
     };
 
-    fetchFollowCounts();
+    fetchProfile();
 
     return () => {
       ignore = true;
     };
   }, [userId]);
 
+  const openListModal = async (type) => {
+    setListModal(type);
+    setListLoading(true);
+
+    try {
+      const data =
+        type === "followers"
+          ? await getFollowers(userId)
+          : await getFollowings(userId);
+
+      if (type === "followers") {
+        setFollowerList(data || []);
+      } else {
+        setFollowingList(data || []);
+      }
+    } catch (err) {
+      console.error("팔로워/팔로잉 목록 조회 오류:", err);
+    } finally {
+      setListLoading(false);
+    }
+  };
+
   const [followLoading, setFollowLoading] = useState(false);
 
   // ==================================================
-  // ★ 팔로우 (백엔드 연동)
+  // ★ 팔로우 / 언팔로우 토글 (백엔드 연동)
   //
-  // POST /api/members/{followingId}/follow
-  // 응답: 없음(200)
+  // POST   /api/members/{followingId}/follow   → 팔로우
+  // DELETE /api/members/{followingId}/follow   → 언팔로우
   //
-  // 언팔로우 API가 없어서 토글이 아니라 "1회성" 팔로우로만 동작.
-  // 이미 팔로우한 상태면 버튼을 비활성화함.
+  // 자기 자신 팔로우 → 400, 이미 팔로우 중에 POST → 409,
+  // 팔로우 안 한 상태에서 DELETE → 409 (isFollowing이 정확해서
+  // 실제로는 거의 발생하지 않음)
   // ==================================================
 
-  const handleFollow = async () => {
-    if (followLoading || !userId || isFollowing) {
+  const handleFollowToggle = async () => {
+    if (followLoading || !userId) {
       return;
     }
 
     setFollowLoading(true);
 
     try {
-      await follow(userId);
+      if (isFollowing) {
+        await unfollow(userId);
 
-      setIsFollowing(true);
-      setFollowers((n) => n + 1);
+        setIsFollowing(false);
+        setProfile((prev) => ({
+          ...prev,
+          followers: Math.max(0, prev.followers - 1),
+        }));
+      } else {
+        await follow(userId);
+
+        setIsFollowing(true);
+        setProfile((prev) => ({
+          ...prev,
+          followers: prev.followers + 1,
+        }));
+      }
     } catch (err) {
-      console.error("팔로우 요청 오류:", err);
+      console.error("팔로우/언팔로우 요청 오류:", err);
       alert(
-        err.message || "팔로우 요청 중 오류가 발생했습니다."
+        err.message || "요청 중 오류가 발생했습니다."
       );
     } finally {
       setFollowLoading(false);
@@ -383,38 +433,32 @@ function OtherProfile() {
             <div className="profile-top">
               <div className="profile-image" />
               <div className="profile-info">
-                {/*
-                  ⚠️ 닉네임을 조회할 API가 없어서 표시할 수 없음.
-                  Community.js / MeetingRoom.js 등에서 navigate 할 때
-                  state로 nickname을 같이 넘겨주면 최소한의 이름만
-                  임시로 보여줄 수 있음 (그 전까지는 비워둠)
-                */}
                 <div className="profile-name">
-                  {location.state?.nickname || "닉네임 정보 없음"}
+                  {profile.nickname || "닉네임 정보 없음"}
                 </div>
                 <div className="follow-wrap">
                   <div
                     className="follow-box"
                     style={{ cursor: "pointer" }}
-                    onClick={() => setListModal("followers")}
+                    onClick={() => openListModal("followers")}
                   >
-                    <div className="follow-num">{followers}</div>
+                    <div className="follow-num">{profile.followers}</div>
                     <div className="follow-text">팔로워</div>
                   </div>
                   <div
                     className="follow-box"
                     style={{ cursor: "pointer" }}
-                    onClick={() => setListModal("followings")}
+                    onClick={() => openListModal("followings")}
                   >
-                    <div className="follow-num">{following}</div>
+                    <div className="follow-num">{profile.following}</div>
                     <div className="follow-text">팔로잉</div>
                   </div>
                 </div>
                 <div className="follow-btn-wrap">
                   <button
                     className={`follow-action-btn ${isFollowing ? "on" : "off"}`}
-                    onClick={handleFollow}
-                    disabled={followLoading || isFollowing}
+                    onClick={handleFollowToggle}
+                    disabled={followLoading}
                   >
                     {isFollowing ? "팔로잉 ✓" : "팔로우"}
                   </button>
@@ -422,11 +466,11 @@ function OtherProfile() {
               </div>
             </div>
 
-            {/* 소개 — 조회 API가 없어 비워둠 */}
-            <div className="profile-desc" />
+            {/* 소개 */}
+            <div className="profile-desc">{profile.introduction}</div>
             <div className="divider" />
 
-            {/* 책장 — 타인의 읽은 책 목록을 조회하는 API가 없어 비워둠 */}
+            {/* 책장 */}
             <div className="bookshelf-area">
               <div className="lamp-wrap">
                 <div className="lamp-rod" />
@@ -442,7 +486,25 @@ function OtherProfile() {
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
                 onMouseLeave={onMouseUp}
-              />
+              >
+                {(profile.books || []).map((book, index) => {
+                  const h = heights[index % heights.length];
+                  const bg = colors[index % colors.length];
+                  return (
+                    <div
+                      key={book.bookId ?? index}
+                      className="book-item"
+                    >
+                      <div
+                        className="book-spine"
+                        style={{ width: "48px", height: `${h}px`, background: bg }}
+                      >
+                        {book.title}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
 
               <div className="shelf-board" />
             </div>
@@ -464,7 +526,21 @@ function OtherProfile() {
               {listModal === "followers" ? "팔로워" : "팔로잉"}
             </div>
 
-            {(listModal === "followers"
+            {listLoading && (
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: "13px",
+                  color: "#888",
+                  padding: "20px 0",
+                }}
+              >
+                불러오는 중...
+              </div>
+            )}
+
+            {!listLoading &&
+              (listModal === "followers"
               ? followerList
               : followingList
             ).length === 0 && (

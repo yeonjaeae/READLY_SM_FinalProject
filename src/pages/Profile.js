@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 
 import {
   getMemberId,
+  getMyProfile,
   getFollowers,
   getFollowings,
   getMyBookList,
@@ -21,19 +22,12 @@ function Profile() {
   // ==================================================
   // ★ 내 프로필 (백엔드 연동)
   //
-  // ⚠️ 중요: 백엔드 명세서에 "내 프로필 조회" GET API가
-  // 존재하지 않음. 있는 건 PATCH /api/members/me/profile
-  // (닉네임/소개 "수정"만) 뿐이고, 응답도 바디가 없음(200, Void).
+  // GET /api/members/me
+  // → { memberId, nickname, email, introduction, followerCount, followingCount }
   //
-  // 그래서 지금은:
-  // - 닉네임 / 소개 / 프로필 이미지 → 표시할 방법이 없음
-  //   (편집 모달에서 입력한 값을 이 세션 동안만 기억)
-  // - 팔로워/팔로잉 수 → GET /api/members/{memberId}/followers,
-  //   /followings 로 대체 조회(개수만 사용)
+  // - 닉네임 / 소개 / 팔로워·팔로잉 수 → 전부 이 응답으로 채움
   // - 읽은 책 목록 → GET /api/books/my-list
-  //
-  // → 백엔드에 GET /api/members/me (또는 유사) 프로필 조회
-  //   API가 추가되면 이 부분을 그걸로 교체해야 함
+  // - 프로필 이미지는 백엔드에 아직 컬럼이 없어 미리보기로만 반영됨
   // ==================================================
 
   const memberId = getMemberId();
@@ -48,19 +42,40 @@ function Profile() {
   });
 
   // ==================================================
-  // ★ 팔로워/팔로잉 "목록" 자체 (숫자 말고 실제 명단)
+  // ★ 팔로워/팔로잉 "명단" (숫자는 profile.followers/following로
+  // 이미 GET /api/members/me에서 옴 — 여긴 모달을 열 때만 조회)
   //
   // GET /api/members/{memberId}/followers, /followings
   // → [{ memberId, nickname, introduction }]
-  //
-  // 지금까지는 이 배열의 length만 써서 숫자만 보여줬는데,
-  // 명단 자체는 모달로 보여줄 수 있게 원본 배열도 같이 저장
   // ==================================================
 
   const [followerList, setFollowerList] = useState([]);
   const [followingList, setFollowingList] = useState([]);
+  const [listLoading, setListLoading] = useState(false);
 
   const [listModal, setListModal] = useState(null); // "followers" | "followings" | null
+
+  const openListModal = async (type) => {
+    setListModal(type);
+    setListLoading(true);
+
+    try {
+      const data =
+        type === "followers"
+          ? await getFollowers(memberId)
+          : await getFollowings(memberId);
+
+      if (type === "followers") {
+        setFollowerList(data || []);
+      } else {
+        setFollowingList(data || []);
+      }
+    } catch (err) {
+      console.error("팔로워/팔로잉 목록 조회 오류:", err);
+    } finally {
+      setListLoading(false);
+    }
+  };
 
   const [loading, setLoading] =
     useState(true);
@@ -79,20 +94,17 @@ function Profile() {
     setError("");
 
     try {
-      const [followers, followings, books] =
-        await Promise.all([
-          getFollowers(memberId),
-          getFollowings(memberId),
-          getMyBookList(),
-        ]);
-
-      setFollowerList(followers || []);
-      setFollowingList(followings || []);
+      const [me, books] = await Promise.all([
+        getMyProfile(),
+        getMyBookList(),
+      ]);
 
       setProfile((prev) => ({
         ...prev,
-        followers: (followers || []).length,
-        following: (followings || []).length,
+        name: me?.nickname || "",
+        desc: me?.introduction || "",
+        followers: me?.followerCount ?? 0,
+        following: me?.followingCount ?? 0,
         // my-list 응답은 { bookId, name, coverImageUrl }라
         // book-spine에서 쓰는 title 필드로 맞춰줌
         // (review 텍스트는 이 API에 없어서 비워둠)
@@ -175,10 +187,14 @@ function Profile() {
   // 요청: { nickname, introduction } (둘 다 선택값)
   // 응답: 없음 (200)
   //
+  // ⚠️ nickname이 null/공백이면 무시되고 기존 값 유지, introduction은
+  // null이 아니면 빈 문자열도 그대로 반영됨(= 소개 지우기 가능).
+  // 응답 바디가 없으므로 저장 후 fetchProfile()을 다시 불러
+  // 서버에 실제로 반영된 값으로 화면을 갱신함.
+  //
   // ⚠️ 이 API는 이미지를 받지 않음. 프로필 이미지 업로드는
   // 백엔드 명세에 아직 없어서, 선택한 이미지는 이 화면 안에서만
   // 미리보기로 반영되고 서버에는 저장되지 않음.
-  // (별도 이미지 업로드 API가 생기면 연결해야 함)
   // ==================================================
 
   const handleSave = async () => {
@@ -195,15 +211,16 @@ function Profile() {
         introduction: editDesc,
       });
 
-      // 응답 바디가 없어서, 화면에는 입력한 값을 그대로 반영
-      setProfile((prev) => ({
-        ...prev,
-        name: editName,
-        desc: editDesc,
-        image: editImgFile
-          ? editImgPreview
-          : prev.image,
-      }));
+      // 응답 바디가 없으므로, 서버에 실제 반영된 값으로 다시 조회
+      await fetchProfile();
+
+      // 이미지는 서버에 저장되지 않는 필드라 로컬 미리보기만 유지
+      if (editImgFile) {
+        setProfile((prev) => ({
+          ...prev,
+          image: editImgPreview,
+        }));
+      }
 
       setShowModal(false);
     } catch (err) {
@@ -501,7 +518,7 @@ function Profile() {
                   <div
                     className="follow-box"
                     style={{ cursor: "pointer" }}
-                    onClick={() => setListModal("followers")}
+                    onClick={() => openListModal("followers")}
                   >
                     <div className="follow-num">{profile.followers}</div>
                     <div className="follow-text">팔로워</div>
@@ -509,7 +526,7 @@ function Profile() {
                   <div
                     className="follow-box"
                     style={{ cursor: "pointer" }}
-                    onClick={() => setListModal("followings")}
+                    onClick={() => openListModal("followings")}
                   >
                     <div className="follow-num">{profile.following}</div>
                     <div className="follow-text">팔로잉</div>
@@ -649,7 +666,21 @@ function Profile() {
               {listModal === "followers" ? "팔로워" : "팔로잉"}
             </div>
 
-            {(listModal === "followers"
+            {listLoading && (
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: "13px",
+                  color: "#888",
+                  padding: "20px 0",
+                }}
+              >
+                불러오는 중...
+              </div>
+            )}
+
+            {!listLoading &&
+              (listModal === "followers"
               ? followerList
               : followingList
             ).length === 0 && (

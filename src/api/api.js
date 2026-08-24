@@ -1,7 +1,7 @@
 // src/api/api.js
 //
 // ==================================================
-// ★ 백엔드 API 명세 기준 (backend 브랜치, 2026-08-20)
+// ★ 백엔드 API 명세 기준 (backend 브랜치, 2026-08-24)
 //
 // - 인증: Authorization: Bearer <accessToken>
 // - 사용자 식별은 토큰의 memberId로 서버가 처리
@@ -112,13 +112,28 @@ export function getFollowings(memberId) {
 }
 
 // 팔로우하기. 주체는 토큰의 memberId로 고정됨.
-// ⚠️ 언팔로우(취소) API는 현재 백엔드에 없음.
 export function follow(followingId) {
   return apiFetch(`/api/members/${followingId}/follow`, { method: "POST" });
 }
 
+// 언팔로우 (팔로우와 같은 경로, 메서드만 DELETE)
+export function unfollow(followingId) {
+  return apiFetch(`/api/members/${followingId}/follow`, { method: "DELETE" });
+}
+
+// 내 프로필 조회 (인증 필요, 대상은 토큰의 memberId로 고정)
+// → { memberId, nickname, email, introduction, followerCount, followingCount }
+export function getMyProfile() {
+  return apiFetch("/api/members/me", { method: "GET" });
+}
+
+// 타인 프로필 조회 (이메일은 내려주지 않음, 대신 isFollowing 포함)
+// → { memberId, nickname, introduction, followerCount, followingCount, isFollowing }
+export function getOtherProfile(memberId) {
+  return apiFetch(`/api/members/${memberId}`, { method: "GET" });
+}
+
 // 내 프로필 수정 (닉네임 / 소개만 가능, 로그인 아이디 변경 불가)
-// ⚠️ 내 프로필/타인 프로필을 GET으로 "조회"하는 API는 현재 백엔드에 없음.
 export function updateMyProfile({ nickname, introduction }) {
   return apiFetch("/api/members/me/profile", {
     method: "PATCH",
@@ -162,6 +177,11 @@ export function getBookByIsbn(isbn13) {
 // 내가 읽은 책 목록에 추가
 export function addToMyBookList(bookId) {
   return apiFetch(`/api/books/${bookId}/my-list`, { method: "POST" });
+}
+
+// 타인의 읽은 책 목록 → my-list와 같은 형식 [{ bookId, name, coverImageUrl }]
+export function getMemberBookList(memberId) {
+  return apiFetch(`/api/books/members/${memberId}/list`, { method: "GET" });
 }
 
 /* ===================== 3. 독서모임 (/api/book-clubs) ===================== */
@@ -258,21 +278,13 @@ export function getChatHistory(clubId) {
   return apiFetch(`/api/book-clubs/${clubId}/chats`, { method: "GET" });
 }
 
-// 참여자용 AI 개입 요청
-// ⚠️ 알려진 문제(백엔드 명세서 원문): AI 서버로 보내는 요청 형식이
-// AI 서버가 요구하는 형식(book_title, chat_history)과 달라
-// 현재 항상 503으로 실패함 (docs/known-issues.md #11)
-export function requestMeetingAssist(clubId) {
-  return apiFetch(`/api/book-clubs/${clubId}/meeting/assist`, {
-    method: "POST",
-  });
-}
-
 // 방장 전용 AI 진행자 개입. 응답을 AI 이름으로 채팅방에 바로 발행하므로
 // REST 응답 자체엔 내용이 없고, 결과는 STOMP 구독으로 전달됨.
 // mode: "question" | "summary"
+// ⚠️ 참여자용 AI 개입(POST /ai-assist)은 폐지되어 이 엔드포인트 하나로 합쳐짐.
+// 방장이 아니면 409.
 export function requestHostAiAssist(clubId, mode) {
-  return apiFetch(`/api/book-clubs/${clubId}/ai-assist`, {
+  return apiFetch(`/api/book-clubs/${clubId}/meeting/assist`, {
     method: "POST",
     body: JSON.stringify({ mode }),
   });
