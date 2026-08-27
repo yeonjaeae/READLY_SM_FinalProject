@@ -24,6 +24,11 @@
 --      psql -h localhost -U postgres -d readly -f db/2026-08-17-backfill-book-isbn13.sql
 --
 --   dev DB 라 날려도 상관없다면 스키마를 통째로 지우고 재기동해도 된다.
+--
+-- 테이블 이름 주의 (2026-08-26 실행 중 발견):
+--   AINote 엔티티에 @Table(name=...) 이 없어서 Hibernate 가 만드는 실제 테이블 이름은
+--   ai_note 가 아니라 ainote 다. 이 스크립트도 ainote 로 맞춰 두었다.
+--   (문서에서 "ai_note 테이블"이라고 부르는 것은 전부 이 ainote 테이블을 가리킨다.)
 
 -- ============================================================
 -- 1단계: 진단 — isbn13 이 비어 있는 책과 거기에 매달린 참조 수
@@ -36,7 +41,7 @@ SELECT b.book_id,
        (SELECT count(*) FROM member_book mb WHERE mb.book_id = b.book_id) AS member_book_count,
        (SELECT count(*) FROM book_club bc WHERE bc.book_id = b.book_id)   AS book_club_count,
        (SELECT count(*) FROM book_note bn WHERE bn.book_id = b.book_id)   AS book_note_count,
-       (SELECT count(*) FROM ai_note an WHERE an.book_id = b.book_id)     AS ai_note_count
+       (SELECT count(*) FROM ainote an WHERE an.book_id = b.book_id)     AS ainote_count
 FROM book b
 WHERE b.isbn13 IS NULL
 ORDER BY b.book_id;
@@ -86,7 +91,7 @@ WHERE keep.book_id <> bf.book_id;
 -- ============================================================
 -- 4단계: 참조 이관
 -- ============================================================
--- member_book 과 ai_note 는 (회원, 책) 조합이 중복되면 안 되므로,
+-- member_book 과 ainote 는 (회원, 책) 조합이 중복되면 안 되므로,
 -- 옮겼을 때 충돌하는 행은 먼저 지운 뒤 나머지를 옮긴다.
 -- 지우는 쪽은 항상 NULL 행(old)에 달려 있던 것이다. 살릴 행에 이미 같은 내용이 있기 때문이다.
 
@@ -105,18 +110,18 @@ SET book_id = m.keep_book_id
 FROM isbn_merge m
 WHERE mb.book_id = m.old_book_id;
 
--- ai_note: (book_id, member_id) unique 제약이 걸려 있다.
+-- ainote: (book_id, member_id) unique 제약이 걸려 있다.
 -- 충돌하면 살릴 행 쪽 독서록을 남기고, NULL 행에 있던 것은 버린다.
-DELETE FROM ai_note an
+DELETE FROM ainote an
 USING isbn_merge m
 WHERE an.book_id = m.old_book_id
   AND EXISTS (
-      SELECT 1 FROM ai_note keep
+      SELECT 1 FROM ainote keep
       WHERE keep.book_id = m.keep_book_id
         AND keep.member_id = an.member_id
   );
 
-UPDATE ai_note an
+UPDATE ainote an
 SET book_id = m.keep_book_id
 FROM isbn_merge m
 WHERE an.book_id = m.old_book_id;
@@ -169,4 +174,4 @@ ORDER BY b.book_id;
 --   AND NOT EXISTS (SELECT 1 FROM member_book mb WHERE mb.book_id = b.book_id)
 --   AND NOT EXISTS (SELECT 1 FROM book_club  bc WHERE bc.book_id = b.book_id)
 --   AND NOT EXISTS (SELECT 1 FROM book_note  bn WHERE bn.book_id = b.book_id)
---   AND NOT EXISTS (SELECT 1 FROM ai_note    an WHERE an.book_id = b.book_id);
+--   AND NOT EXISTS (SELECT 1 FROM ainote    an WHERE an.book_id = b.book_id);

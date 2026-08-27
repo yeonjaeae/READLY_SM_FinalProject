@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -39,8 +40,11 @@ public class BookClubService {
                 .map(memberBookClub -> memberBookClub.getBookClub().getId())
                 .collect(Collectors.toSet());
 
+        // 인원수도 같은 이유로 쿼리 한 번에 모아 둔다 (모임마다 COUNT를 부르면 N+1이 된다)
+        Map<Long, Integer> memberCounts = countMembersByClub(clubs);
+
         return clubs.stream().map(club -> {
-            int currentMemberCount = memberBookclubRepository.countByBookClubId(club.getId());
+            int currentMemberCount = memberCounts.getOrDefault(club.getId(), 0);
             Book book = club.getBook(); // 아직 책이 연결되지 않은 기존 모임은 null일 수 있다
 
             return new BookClubDto.HomeListResponse(
@@ -91,6 +95,23 @@ public class BookClubService {
                 hostId,
                 resolveRole(hostId, memberId)
         );
+    }
+
+    /**
+     * 목록에 실을 모임들의 인원수를 GROUP BY 쿼리 한 번으로 모은다 (known-issues #17).
+     * 가입자가 없는 모임은 결과에 없으므로 읽는 쪽에서 0으로 채운다.
+     */
+    private Map<Long, Integer> countMembersByClub(List<BookClub> clubs) {
+        if (clubs.isEmpty()) {
+            return Map.of(); // 빈 목록을 in 절에 넘기면 DB에 따라 문법 오류가 난다
+        }
+
+        List<Long> clubIds = clubs.stream().map(BookClub::getId).toList();
+
+        return memberBookclubRepository.countByBookClubIds(clubIds).stream()
+                .collect(Collectors.toMap(
+                        MemberBookClubRepository.ClubMemberCount::getClubId,
+                        count -> (int) count.getMemberCount()));
     }
 
     // host는 LAZY 프록시지만 getId()는 추가 쿼리 없이 읽힌다.
@@ -172,8 +193,13 @@ public class BookClubService {
      * 내가 가입한 독서모임 목록
      */
     public List<BookClubDto.HomeListResponse> getMyBookClubs(Long memberId) {
-        return memberBookclubRepository.findAllByMemberIdWithBookClub(memberId).stream()
+        List<BookClub> clubs = memberBookclubRepository.findAllByMemberIdWithBookClub(memberId).stream()
                 .map(MemberBookClub::getBookClub)
+                .toList();
+
+        Map<Long, Integer> memberCounts = countMembersByClub(clubs);
+
+        return clubs.stream()
                 .map(club -> {
                     Book book = club.getBook();
                     return new BookClubDto.HomeListResponse(
@@ -184,7 +210,7 @@ public class BookClubService {
                             book != null ? book.getCoverImageUrl() : null,
                             club.getCreationDate(),
                             club.getCreationTime(),
-                            memberBookclubRepository.countByBookClubId(club.getId()),
+                            memberCounts.getOrDefault(club.getId(), 0),
                             club.getMemberCapacity(),
                             club.getStatus(),
                             club.getType(),

@@ -7,8 +7,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
+import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -56,6 +58,21 @@ public class ChatController {
 
         Long memberId = (Long) ((Authentication) principal).getPrincipal();
         chatService.sendMessage(clubId, memberId, request.content());
+    }
+
+    /**
+     * STOMP 전송이 거부됐을 때 보낸 사람에게 사유를 돌려준다.
+     *
+     * @MessageMapping 안에서 예외가 나면 스프링은 로그만 남기고 클라이언트에는 아무것도 보내지 않는다.
+     * 채팅방 활성화 시간(모임 시작 15분 전 ~ 종료 15분 후)을 벗어난 전송을 조용히 삼키면
+     * 사용자는 메시지가 사라진 것으로 보이므로, 보낸 사람 전용 경로로 사유를 통보한다.
+     *
+     * 클라이언트 구독 경로: /user/sub/errors (@SendToUser가 사용자별 목적지로 바꿔 준다)
+     */
+    @MessageExceptionHandler({IllegalStateException.class, IllegalArgumentException.class})
+    @SendToUser("/sub/errors")
+    public ChatDto.ErrorResponse handleSendRejected(RuntimeException e) {
+        return new ChatDto.ErrorResponse(e.getMessage());
     }
 
     /**

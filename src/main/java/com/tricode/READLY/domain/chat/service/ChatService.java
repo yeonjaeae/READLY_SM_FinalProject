@@ -19,7 +19,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -39,15 +41,26 @@ public class ChatService {
     private final MemberBookClubRepository memberBookClubRepository;
     private final BookClubRepository bookClubRepository;
     private final MemberRepository memberRepository;
-    private final RestTemplate restTemplate;
+    // AI 전용 RestTemplate (타임아웃이 긴 빈). 필드 이름으로 주입 대상이 정해진다 - RestTemplateConfig 참고
+    private final RestTemplate aiRestTemplate;
 
     @Value("${ai.base-url}")
     private String aiBaseUrl;
 
     private static final int RECENT_MESSAGE_LIMIT = 50; // AI에게 넘길 최근 대화 개수 제한
 
+    // 채팅방 활성화 윈도우: 모임 시작 15분 전에 열리고, 30분짜리 모임이 끝난 뒤 15분 뒤에 닫힌다(총 60분).
+    // 이 판정은 오직 백엔드에서만 한다. 프론트나 AI 서버에 상태를 넘겨 위임하지 않는다.
+    private static final int MEETING_DURATION_MINUTES = 30;
+    private static final int WINDOW_OPEN_BEFORE_MINUTES = 15;
+    private static final int WINDOW_CLOSE_AFTER_MINUTES = 15;
+
     public void sendMessage(Long clubId, Long memberId, String content) {
+        BookClub bookClub = bookClubRepository.findById(clubId)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 독서모임입니다."));
+
         validateClubMember(clubId, memberId);
+        validateChatWindow(bookClub);
 
         // Redis에 들어갈 객체 조립 (ID는 UUID로 생성)
         ChatMessage message = ChatMessage.builder()
@@ -58,7 +71,7 @@ public class ChatService {
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        // Kafka로 메시지 발행
+        // Redis 채널로 메시지 발행 (ChatConsumer가 구독해 저장/브로드캐스트/AI 전달을 처리한다)
         chatProducer.sendMessage(message);
     }
 
@@ -132,7 +145,7 @@ public class ChatService {
         // 프론트가 성공한 것으로 표시하므로, 예외로 올려 503으로 응답한다.
         ChatDto.MeetingAssistApiResponse response;
         try {
-            response = restTemplate.postForObject(
+            response = aiRestTemplate.postForObject(
                     aiBaseUrl + "/api/meeting/assist", requestEntity, ChatDto.MeetingAssistApiResponse.class);
         } catch (RestClientException e) {
             throw new AiServerException("AI 진행자 개입 요청 실패 (clubId: " + clubId + ")", e);
@@ -177,6 +190,38 @@ public class ChatService {
             return "AI";
         }
         return memberNames.getOrDefault(memberId, "알 수 없는 사용자");
+    }
+
+    /**
+     * 채팅방이 열려 있는 시간대인지 확인한다.
+     *
+     * 모임 시작 15분 전 ~ 종료(시작 + 30분) 15분 후, 총 60분 동안만 메시지를 받는다.
+     * 조회(getChatHistory)는 이 제한을 받지 않는다. 모임이 끝난 뒤에도 7일 동안은 대화를 다시 볼 수 있어야 한다.
+     *
+     * AI가 보내는 메시지(AI_MEMBER_ID)도 똑같이 막는다. 창구를 하나로 두어야 우회 경로가 생기지 않고,
+     * AI 응답은 방장이 모임 중에 요청한 것이라 정상 흐름에서는 윈도우 안에 들어온다.
+     * (모임 종료 15분 전후로 요청한 AI 응답이 아주 늦게 도착하면 거부될 수 있다. 이 경우는 로그로만 남는다.)
+     */
+    private void validateChatWindow(BookClub bookClub) {
+        LocalDate date = bookClub.getCreationDate();
+        LocalTime time = bookClub.getCreationTime();
+
+        // 날짜/시간이 비어 있는 과거 모임은 윈도우를 계산할 수 없다. 채팅을 막지 않고 그대로 통과시킨다.
+        if (date == null || time == null) {
+            return;
+        }
+
+        LocalDateTime start = LocalDateTime.of(date, time);
+        LocalDateTime opensAt = start.minusMinutes(WINDOW_OPEN_BEFORE_MINUTES);
+        LocalDateTime closesAt = start.plusMinutes(MEETING_DURATION_MINUTES + WINDOW_CLOSE_AFTER_MINUTES);
+
+        LocalDateTime now = LocalDateTime.now();
+        if (now.isBefore(opensAt)) {
+            throw new IllegalStateException("아직 채팅방이 열리지 않았습니다. 모임 시작 15분 전부터 이용할 수 있습니다.");
+        }
+        if (now.isAfter(closesAt)) {
+            throw new IllegalStateException("채팅방이 종료되었습니다. 지난 대화는 계속 확인할 수 있습니다.");
+        }
     }
 
     // 가입하지 않은 북클럽의 채팅방은 이용할 수 없다 (AI 에이전트는 예외)

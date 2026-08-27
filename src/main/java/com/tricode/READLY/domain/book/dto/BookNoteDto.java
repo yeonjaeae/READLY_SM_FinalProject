@@ -1,5 +1,7 @@
 package com.tricode.READLY.domain.book.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 public class BookNoteDto {
@@ -50,8 +52,12 @@ public class BookNoteDto {
 
     // AI 서버에 독후감 생성 요청 (POST /api/review/generate)
     // 한 회원이 그 책에 남긴 독서록을 전부 보내고, 성향 태그 분석도 같은 요청에서 함께 받는다.
+    //
+    // AI 서버는 필드명을 snake_case로 받는다. 2026-08-26 실제 호출에서 bookTitle로 보내면
+    // 422("book_title: Field required")가 나는 것을 확인하고 @JsonProperty를 붙였다.
+    // notes / phrase / feeling은 그대로 통과한다. (채팅 쪽 MeetingAssistApiRequest와 같은 규칙)
     public record ReviewGenerateRequest(
-            String bookTitle,
+            @JsonProperty("book_title") String bookTitle,
             List<NoteItem> notes
     ) {}
 

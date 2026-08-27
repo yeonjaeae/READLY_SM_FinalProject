@@ -34,7 +34,8 @@ public class BookNoteService {
     private final AINoteRepository aiNoteRepository;
     private final BookRepository bookRepository;
     private final MemberRepository memberRepository;
-    private final RestTemplate restTemplate;
+    // AI 전용 RestTemplate (타임아웃이 긴 빈). 필드 이름으로 주입 대상이 정해진다 - RestTemplateConfig 참고
+    private final RestTemplate aiRestTemplate;
 
     @Value("${ai.base-url}")
     private String aiBaseUrl;
@@ -128,7 +129,7 @@ public class BookNoteService {
 
         BookNoteDto.ReviewGenerateResponse response;
         try {
-            response = restTemplate.postForObject(
+            response = aiRestTemplate.postForObject(
                     aiBaseUrl + "/api/review/generate", requestEntity, BookNoteDto.ReviewGenerateResponse.class);
         } catch (RestClientException e) {
             throw new AiServerException("AI 독후감 생성 요청 실패 (bookTitle: " + bookTitle + ")", e);

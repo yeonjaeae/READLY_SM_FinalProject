@@ -24,6 +24,13 @@ public class ChatDto {
             LocalDateTime createdAt
     ) {}
 
+    // STOMP 전송이 거부됐을 때 보낸 사람에게만 돌려주는 알림.
+    // REST는 GlobalExceptionHandler가 상태코드로 알려주지만, STOMP는 예외를 던져도 클라이언트에
+    // 아무것도 가지 않아 조용한 실패가 된다. 그래서 보낸 사람의 /user/sub/errors 로 사유를 보낸다.
+    public record ErrorResponse(
+            String message
+    ) {}
+
     // 모임장이 AI 진행자 개입 버튼을 누를 때 보내는 요청 (POST /api/book-clubs/{clubId}/meeting/assist)
     public record MeetingAssistRequest(
             String mode // "question"(토론 질문 제안) 또는 "summary"(대화 요약)

@@ -1,19 +1,19 @@
 package com.tricode.READLY.domain.chat.service;
 
 import com.tricode.READLY.domain.chat.entity.ChatMessage;
+import com.tricode.READLY.global.config.RedisSubConfig;
 import lombok.RequiredArgsConstructor;
-import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
 public class ChatProducer {
 
-    private final KafkaTemplate<String, ChatMessage> kafkaTemplate;
-    private static final String TOPIC = "chat-group"; // Kafka 토픽 이름
+    private final RedisTemplate<String, ChatMessage> chatRedisTemplate;
 
     public void sendMessage(ChatMessage message) {
-        // ChatMessage 엔티티 객체를 Kafka 토픽으로 전송하여 연계 시작!
-        kafkaTemplate.send(TOPIC, message);
+        // ChatMessage 객체를 Redis 채널로 발행한다. 같은 애플리케이션의 ChatConsumer가 구독해 처리한다.
+        chatRedisTemplate.convertAndSend(RedisSubConfig.CHAT_CHANNEL, message);
     }
 }
