@@ -10,7 +10,7 @@
 // - ResponseEntity<Long> → 상태 200, 바디는 순수 숫자
 // ==================================================
 
-const API_BASE_URL = "http://localhost:8080";
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
 
 const TOKEN_KEY = "accessToken";
 const MEMBER_ID_KEY = "memberId";
