@@ -19,9 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -51,9 +49,7 @@ public class ChatService {
 
     // 채팅방 활성화 윈도우: 모임 시작 15분 전에 열리고, 30분짜리 모임이 끝난 뒤 15분 뒤에 닫힌다(총 60분).
     // 이 판정은 오직 백엔드에서만 한다. 프론트나 AI 서버에 상태를 넘겨 위임하지 않는다.
-    private static final int MEETING_DURATION_MINUTES = 30;
-    private static final int WINDOW_OPEN_BEFORE_MINUTES = 15;
-    private static final int WINDOW_CLOSE_AFTER_MINUTES = 15;
+    // 구간 계산은 BookClub이 갖고 있다 (목록의 진행/종료 표시도 같은 값을 쓴다).
 
     public void sendMessage(Long clubId, Long memberId, String content) {
         BookClub bookClub = bookClubRepository.findById(clubId)
@@ -203,17 +199,13 @@ public class ChatService {
      * (모임 종료 15분 전후로 요청한 AI 응답이 아주 늦게 도착하면 거부될 수 있다. 이 경우는 로그로만 남는다.)
      */
     private void validateChatWindow(BookClub bookClub) {
-        LocalDate date = bookClub.getCreationDate();
-        LocalTime time = bookClub.getCreationTime();
+        LocalDateTime opensAt = bookClub.getChatOpensAt();
+        LocalDateTime closesAt = bookClub.getChatClosesAt();
 
         // 날짜/시간이 비어 있는 과거 모임은 윈도우를 계산할 수 없다. 채팅을 막지 않고 그대로 통과시킨다.
-        if (date == null || time == null) {
+        if (opensAt == null || closesAt == null) {
             return;
         }
-
-        LocalDateTime start = LocalDateTime.of(date, time);
-        LocalDateTime opensAt = start.minusMinutes(WINDOW_OPEN_BEFORE_MINUTES);
-        LocalDateTime closesAt = start.plusMinutes(MEETING_DURATION_MINUTES + WINDOW_CLOSE_AFTER_MINUTES);
 
         LocalDateTime now = LocalDateTime.now();
         if (now.isBefore(opensAt)) {

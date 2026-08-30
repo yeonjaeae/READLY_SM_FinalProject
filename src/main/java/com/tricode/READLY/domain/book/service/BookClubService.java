@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,6 +44,8 @@ public class BookClubService {
         // 인원수도 같은 이유로 쿼리 한 번에 모아 둔다 (모임마다 COUNT를 부르면 N+1이 된다)
         Map<Long, Integer> memberCounts = countMembersByClub(clubs);
 
+        LocalDateTime now = LocalDateTime.now();
+
         return clubs.stream().map(club -> {
             int currentMemberCount = memberCounts.getOrDefault(club.getId(), 0);
             Book book = club.getBook(); // 아직 책이 연결되지 않은 기존 모임은 null일 수 있다
@@ -57,7 +60,7 @@ public class BookClubService {
                     club.getCreationTime(),
                     currentMemberCount,
                     club.getMemberCapacity(),
-                    club.getStatus(),
+                    club.resolveStatus(now, currentMemberCount),
                     club.getType(),
                     // 가입한 모임만 실제 역할을 채우고, 가입하지 않은 모임은 null로 둔다.
                     // 프론트가 이 값으로 입장 전 join 호출 여부를 판단한다.
@@ -79,6 +82,7 @@ public class BookClubService {
                 .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 독서모임입니다."));
         Book book = club.getBook();
         Long hostId = getHostId(club);
+        int currentMemberCount = memberBookclubRepository.countByBookClubId(clubId);
 
         return new BookClubDto.DetailResponse(
                 club.getId(),
@@ -88,9 +92,9 @@ public class BookClubService {
                 book != null ? book.getCoverImageUrl() : null,
                 club.getCreationDate(),
                 club.getCreationTime(),
-                memberBookclubRepository.countByBookClubId(clubId),
+                currentMemberCount,
                 club.getMemberCapacity(),
-                club.getStatus(),
+                club.resolveStatus(LocalDateTime.now(), currentMemberCount),
                 club.getType(),
                 hostId,
                 resolveRole(hostId, memberId)
@@ -176,10 +180,13 @@ public class BookClubService {
         if (memberBookclubRepository.existsByMemberIdAndBookClubId(memberId, clubId)) {
             throw new IllegalStateException("이미 가입한 독서모임입니다.");
         }
-        if (bookClub.getStatus() == BookClub.ClubStatus.COMPLETED) {
+        int currentMemberCount = memberBookclubRepository.countByBookClubId(clubId);
+
+        // 저장된 status는 PENDING에서 바뀌지 않으므로 조회 응답과 같은 방식으로 계산해 판정한다
+        if (bookClub.resolveStatus(LocalDateTime.now(), currentMemberCount) == BookClub.ClubStatus.COMPLETED) {
             throw new IllegalStateException("이미 종료된 독서모임입니다.");
         }
-        if (memberBookclubRepository.countByBookClubId(clubId) >= bookClub.getMemberCapacity()) {
+        if (bookClub.isFull(currentMemberCount)) {
             throw new IllegalStateException("정원이 가득 찬 독서모임입니다.");
         }
 
@@ -198,10 +205,12 @@ public class BookClubService {
                 .toList();
 
         Map<Long, Integer> memberCounts = countMembersByClub(clubs);
+        LocalDateTime now = LocalDateTime.now();
 
         return clubs.stream()
                 .map(club -> {
                     Book book = club.getBook();
+                    int currentMemberCount = memberCounts.getOrDefault(club.getId(), 0);
                     return new BookClubDto.HomeListResponse(
                             club.getId(),
                             club.getName(),
@@ -210,9 +219,9 @@ public class BookClubService {
                             book != null ? book.getCoverImageUrl() : null,
                             club.getCreationDate(),
                             club.getCreationTime(),
-                            memberCounts.getOrDefault(club.getId(), 0),
+                            currentMemberCount,
                             club.getMemberCapacity(),
-                            club.getStatus(),
+                            club.resolveStatus(now, currentMemberCount),
                             club.getType(),
                             resolveRole(getHostId(club), memberId) // 전부 내가 가입한 모임이라 역할을 정할 수 있다
                     );

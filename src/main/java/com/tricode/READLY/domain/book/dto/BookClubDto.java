@@ -26,6 +26,8 @@ public class BookClubDto {
             LocalTime time,
             int currentMemberCount,
             int maxCapacity,
+            // PENDING(모집중) / FULL(모집완료) / IN_PROGRESS(모임중) / COMPLETED(종료).
+            // 저장된 컬럼이 아니라 인원과 모임 시각으로 계산해 내려준다 (BookClub.resolveStatus).
             BookClub.ClubStatus status,
             BookClub.PassionType type,
             ClubRole role
