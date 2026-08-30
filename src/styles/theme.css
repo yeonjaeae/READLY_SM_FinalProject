@@ -218,12 +218,11 @@ body {
   background: #c9eb7f;
   border-radius: 30px;
   padding: 12px;
-  width: 60%;        /* 추가: 원하는 비율로 카드 폭 줄이기 */
-  margin: 0 auto;    /* 추가: 가운데 정렬 */
+      /* 추가: 가운데 정렬 */
 }
 
 .hero-image {
-  width: 100%;
+  width: 120px;
   height: 160px;     /* 100% → 고정 높이로 변경 (숫자는 원하는 크기로 조절) */
   object-fit: contain;
   background-color: #f0f0f0;
