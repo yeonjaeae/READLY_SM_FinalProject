@@ -217,20 +217,17 @@ body {
 .hero-card {
   background: #c9eb7f;
   border-radius: 30px;
-  padding: 16px;
-  width: 50%;
-  margin: 0 auto;
+  padding: 12px;
+  width: 60%;        /* 추가: 원하는 비율로 카드 폭 줄이기 */
+  margin: 0 auto;    /* 추가: 가운데 정렬 */
 }
 
 .hero-image {
-  display: block;
   width: 100%;
-  aspect-ratio: 2 / 3;   /* 책 표지 비율에 맞춤 (가로:세로 = 2:3) */
-  height: auto;           /* 고정 height 대신 비율로 자동 계산 */
-  object-fit: cover;      /* contain → cover로 변경 (회색 여백 없이 꽉 채움) */
-  margin: 0 auto;
+  height: 160px;     /* 100% → 고정 높이로 변경 (숫자는 원하는 크기로 조절) */
+  object-fit: contain;
+  background-color: #f0f0f0;
 }
-
 .hero-title {
   margin-top: 18px;
 
