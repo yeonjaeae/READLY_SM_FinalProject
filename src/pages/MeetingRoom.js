@@ -112,6 +112,16 @@ function MeetingRoom() {
   const [input, setInput] = useState("");
 
   // ==================================================
+  // ★ 채팅 전송 거부 알림 (2026-08-26 문서)
+  //
+  // 모임 시작 15분 전 ~ 종료 15분 후에만 전송이 허용되고,
+  // 그 밖의 시간대에 보내면 서버가 조용히 거부한 뒤
+  // /user/sub/errors로 사유만 보내줌. 그걸 받아서 화면에 표시.
+  // ==================================================
+
+  const [sendError, setSendError] = useState("");
+
+  // ==================================================
   // AI 로딩 (방장 전용 AI 진행자 요청)
   // ==================================================
 
@@ -213,6 +223,12 @@ function MeetingRoom() {
           "실시간 채팅 연결에 실패했습니다."
         );
       },
+      onSendRejected: (reason) => {
+        setSendError(
+          reason ||
+            "메시지를 보낼 수 없습니다."
+        );
+      },
     });
 
     chatClientRef.current = client;
@@ -270,6 +286,8 @@ function MeetingRoom() {
       return;
     }
 
+    setSendError("");
+
     sendChatMessage(
       chatClientRef.current,
       roomId,
@@ -282,11 +300,15 @@ function MeetingRoom() {
   // ==================================================
   // AI 진행자 요청
   //
-  // ★ POST /api/book-clubs/{clubId}/ai-assist — { mode }
+  // ★ POST /api/book-clubs/{clubId}/meeting/assist — { mode }
   // 방장만 호출 가능(호출자가 방장이 아니면 409)
   //
   // 이 API는 응답 바디가 없고, AI 응답은 AI 이름으로 채팅방에
   // 바로 발행되어 위의 STOMP 구독을 통해 도착함
+  //
+  // ★ AI 서버 콜드스타트 등으로 최대 2분까지 걸릴 수 있음
+  // (백엔드 타임아웃 120초). 버튼은 aiLoading 동안 비활성화되어
+  // 있어 중복 클릭으로 여러 번 요청이 나가는 것을 막아줌.
   // ==================================================
 
   const requestAI = async (mode = "question") => {
@@ -587,6 +609,46 @@ function MeetingRoom() {
               {aiError}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ==================================================
+          채팅 전송 거부 알림 (모임 시작 전 / 종료 후)
+
+          ★ /user/sub/errors로 온 사유를 표시.
+          다음 정상 전송 시도(sendMessage) 때 자동으로 사라짐.
+      ================================================== */}
+
+      {sendError && (
+        <div
+          style={{
+            position: "fixed",
+
+            bottom: isHost && !roleLoading ? "190px" : "130px",
+
+            left: 0,
+            right: 0,
+
+            margin: "0 auto",
+
+            width: "100%",
+            maxWidth: "430px",
+
+            padding: "10px 14px",
+
+            background: "#fdecea",
+            color: "#c0392b",
+
+            fontSize: "13px",
+            fontWeight: "600",
+            textAlign: "center",
+
+            boxSizing: "border-box",
+
+            zIndex: 110,
+          }}
+        >
+          {sendError}
         </div>
       )}
 
