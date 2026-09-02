@@ -703,40 +703,65 @@ function Community() {
 
             {/* ------------------------------------------
                 날짜 / 시간
+
+                ★ iOS(사파리/크롬 모두 WebKit 엔진)는 값이 비어있는
+                <input type="date"/"time">에 placeholder(년-월-일 등)를
+                아예 그려주지 않아, 값이 없을 때 빈 상자만 보이는 문제가 있음.
+
+                해결: 진짜 input은 그대로 두고 겹쳐서 살짝 투명 처리한 뒤,
+                값이 비어있을 때만 그 위에 우리가 만든 텍스트를 얹어서 보여줌.
+                오버레이는 pointerEvents: "none"이라 탭은 그대로 아래 input에
+                전달되어 iOS 네이티브 선택 UI가 정상적으로 뜸.
             ------------------------------------------ */}
 
             <div className="date-time-wrap">
 
-              <input
-                type="date"
-                value={
-                  newMeeting.date
-                }
-                onChange={(e) =>
-                  setNewMeeting({
-                    ...newMeeting,
+              <div className="date-time-field">
+                <input
+                  type="date"
+                  value={
+                    newMeeting.date
+                  }
+                  onChange={(e) =>
+                    setNewMeeting({
+                      ...newMeeting,
 
-                    date:
-                      e.target.value,
-                  })
-                }
-              />
+                      date:
+                        e.target.value,
+                    })
+                  }
+                />
+
+                {!newMeeting.date && (
+                  <span className="date-time-placeholder">
+                    년-월-일
+                  </span>
+                )}
+              </div>
 
 
-              <input
-                type="time"
-                value={
-                  newMeeting.time
-                }
-                onChange={(e) =>
-                  setNewMeeting({
-                    ...newMeeting,
+              <div className="date-time-field">
+                <input
+                  type="time"
+                  value={
+                    newMeeting.time
+                  }
+                  onChange={(e) =>
+                    setNewMeeting({
+                      ...newMeeting,
 
-                    time:
-                      e.target.value,
-                  })
-                }
-              />
+                      time:
+                        e.target.value,
+                    })
+                  }
+                />
+
+                {!newMeeting.time && (
+                  <span className="date-time-placeholder">
+                    --:--
+                  </span>
+                )}
+              </div>
 
             </div>
 

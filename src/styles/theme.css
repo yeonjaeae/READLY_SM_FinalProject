@@ -1411,6 +1411,26 @@ body {
   box-sizing: border-box;
 }
 
+/* ↓↓↓ 여기부터 새로 추가 ↓↓↓ */
+
+.date-time-field {
+  position: relative;
+  flex: 1;
+}
+
+.date-time-placeholder {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  font-size: 15px;
+  color: #aaaaaa;
+
+  pointer-events: none;
+
+  background: transparent;
+}
 .people-box {
   background: #f8f8f8;
   border-radius: 18px;
