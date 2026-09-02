@@ -1396,6 +1396,19 @@ body {
 
 .date-time-wrap input {
   flex: 1;
+  min-width: 0;
+
+  font-size: 15px;
+  color: #333;
+
+  padding: 10px 12px;
+
+  border: 1px solid #ddd;
+  border-radius: 10px;
+
+  background: #fafafa;
+
+  box-sizing: border-box;
 }
 
 .people-box {
