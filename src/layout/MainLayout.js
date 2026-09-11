@@ -1,3 +1,4 @@
+
 // src/layout/MainLayout.js
 
 import {
@@ -15,18 +16,19 @@ import {
 
 function MainLayout() {
   const navigate = useNavigate();
-
   const location = useLocation();
 
   return (
     <div className="app-container">
+      {/* 현재 선택된 페이지가 표시되는 영역 */}
       <Outlet />
 
+      {/* 하단 네비게이션 */}
       <div className="bottom-nav">
+        {/* 홈 */}
         <FiHome
           className={
-            location.pathname ===
-            "/home"
+            location.pathname === "/home"
               ? "active-nav"
               : ""
           }
@@ -35,22 +37,23 @@ function MainLayout() {
           }
         />
 
+        {/* 독후감 */}
         <FiEdit3
           className={
-            location.pathname ===
-            "/aiwrite"
+            location.pathname === "/write" ||
+            location.pathname === "/write/detail"
               ? "active-nav"
               : ""
           }
           onClick={() =>
-            navigate("/aiwrite")
+            navigate("/write")
           }
         />
 
+        {/* 커뮤니티 */}
         <FiUsers
           className={
-            location.pathname ===
-            "/community"
+            location.pathname === "/community"
               ? "active-nav"
               : ""
           }
@@ -59,10 +62,10 @@ function MainLayout() {
           }
         />
 
+        {/* 프로필 */}
         <FiUser
           className={
-            location.pathname ===
-            "/profile"
+            location.pathname === "/profile"
               ? "active-nav"
               : ""
           }
