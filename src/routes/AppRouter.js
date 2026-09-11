@@ -12,7 +12,9 @@ import Login from "../pages/Login";
 import Signup from "../pages/Signup";
 
 import Home from "../pages/Home";
+import AIWriteList from "../pages/AIWriteList";
 import AIWrite from "../pages/AIWrite";
+
 import Community from "../pages/Community";
 import MeetingRoom from "../pages/MeetingRoom";
 import Profile from "../pages/Profile";
@@ -46,11 +48,12 @@ function AppRouter() {
           element={<Home />}
         />
 
-        <Route
-          path="/aiwrite"
-          element={<AIWrite />}
-        />
-
+        <Route 
+          path="/write" 
+          element={<AIWriteList />} />
+        <Route 
+          path="/write/detail" 
+          element={<AIWrite />} />
         <Route
           path="/community"
           element={<Community />}
