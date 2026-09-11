@@ -567,7 +567,15 @@ function Profile() {
                     <div
                       key={book.bookId ?? index}
                       className="book-item"
-                      onClick={() => navigate("/review", { state: { title: book.title, review: book.review } })}
+                      onClick={() =>
+                        navigate("/write", {
+                          state: {
+                            bookId: book.bookId,
+                            name: book.title,
+                            coverImageUrl: book.coverImageUrl,
+                          },
+                        })
+                      }
                     >
                       <div
                         className="book-spine"

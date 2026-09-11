@@ -1,6 +1,7 @@
 // src/pages/AIWrite.js
 
 import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 
 import {
   FiSearch,
@@ -30,6 +31,27 @@ import {
 } from "../api/api";
 
 function AIWrite() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // ==================================================
+  // ★ 마이페이지 책장에서 다시 들어온 경우 (2026-08 수정)
+  //
+  // Profile.js에서 책을 클릭하면 이 화면으로
+  // { bookId, name, writer, coverImageUrl } 를 state로 넘겨줌.
+  // 이 경우 검색 단계를 건너뛰고 바로 그 책으로 시작하고,
+  // 이미 생성된 AI 독후감이 있으면 같이 불러와서 계속 수정할 수 있게 함.
+  // ==================================================
+
+  const preselectedBook = location.state?.bookId
+    ? {
+        bookId: location.state.bookId,
+        name: location.state.name,
+        writer: location.state.writer,
+        coverImageUrl: location.state.coverImageUrl,
+      }
+    : null;
+
   // ==================================================
   // ★ 책 검색 / 선택 (백엔드 실제 엔드포인트로 교체)
   //
@@ -50,7 +72,7 @@ function AIWrite() {
     useState(false);
 
   const [selectedBook, setSelectedBook] =
-    useState(null); // { isbn13, name, writer, coverImageUrl, bookId }
+    useState(preselectedBook); // { isbn13?, name, writer, coverImageUrl, bookId }
 
   const [
     bookRegisterLoading,
@@ -116,6 +138,51 @@ function AIWrite() {
     };
   }, [selectedBook?.bookId]);
 
+  // ==================================================
+  // ★ 이미 생성된 AI 독후감 미리 불러오기 (책장에서 재진입한 경우)
+  //
+  // GET /api/notes/books/{bookId}/ai-note
+  // → { exists, aiNoteId, content, tags, edited }
+  //
+  // exists:true면 바로 결과 카드에 채워서, 새로 만들지 않아도
+  // 곧바로 수정(PATCH)부터 이어서 할 수 있게 함
+  // ==================================================
+
+  useEffect(() => {
+    if (!selectedBook?.bookId) {
+      return;
+    }
+
+    let ignore = false;
+
+    const fetchExistingAiNote = async () => {
+      try {
+        const aiNote = await getAiNote(
+          selectedBook.bookId
+        );
+
+        if (!ignore && aiNote?.exists) {
+          setGeneratedText(aiNote.content || "");
+          setAiNoteId(aiNote.aiNoteId ?? null);
+          setAiNoteTags(aiNote.tags || []);
+          setGenerated(true);
+        }
+      } catch (error) {
+        console.error(
+          "기존 AI 독후감 조회 오류:",
+          error
+        );
+      }
+    };
+
+    fetchExistingAiNote();
+
+    return () => {
+      ignore = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBook?.bookId]);
+
   useEffect(() => {
     if (keyword.trim() === "") {
       setSearchResults([]);
@@ -168,6 +235,25 @@ function AIWrite() {
       setSelectedBook({ ...book, bookId });
       setKeyword("");
       setSearchResults([]);
+
+      // ==================================================
+      // ★ 책을 고른 시점에 바로 "내가 읽은 책 목록"에도 추가
+      //
+      // 마이페이지 책장에서 다시 들어와 이어서 쓸 수 있으려면
+      // AI 독후감을 완성하기 전에도 my-list에 있어야 하므로,
+      // 예전처럼 생성 완료 시점이 아니라 여기서 바로 추가함.
+      // 이미 추가된 책이어도 전체 플로우가 막히지 않도록
+      // 실패는 조용히 무시함.
+      // ==================================================
+
+      try {
+        await addToMyBookList(bookId);
+      } catch (addErr) {
+        console.warn(
+          "읽은 책 목록 추가 실패(이미 추가된 책일 수 있음):",
+          addErr
+        );
+      }
     } catch (error) {
       console.error(
         "책 등록 오류:",
@@ -220,6 +306,18 @@ function AIWrite() {
 
   const [aiNoteId, setAiNoteId] =
     useState(null);
+
+  // ==================================================
+  // ★ 오늘의 감정 태그
+  //
+  // GET .../ai-note, POST .../ai-generate 응답의 tags[] 그대로 사용.
+  // ⚠️ 2026-08-26 문서: 현재 AI 서버 응답에 태그가 없어 항상
+  // 빈 배열([])로 옴. 하드코딩 대신 실제 응답을 쓰되, 비어있으면
+  // 태그 섹션 자체를 숨김 (백엔드가 태그를 주기 시작하면 자동으로 나타남)
+  // ==================================================
+
+  const [aiNoteTags, setAiNoteTags] =
+    useState([]);
 
   const [isEditingAiNote, setIsEditingAiNote] =
     useState(false);
@@ -497,34 +595,45 @@ function AIWrite() {
   };
 
   // =========================
-  // ★ AI 독후감 생성 (백엔드 실제 엔드포인트로 교체)
+  // ★ 구절/느낌 저장 (백엔드 실제 엔드포인트로 교체)
   //
-  // 1) POST /api/notes/books/{bookId} { phrase, feeling }
-  //    → 내 독서록(구절+느낌)을 먼저 저장
-  // 2) POST /api/notes/books/{bookId}/ai-generate
-  //    → 저장된 독서록들을 취합해 AI 독후감 생성, aiNoteId 반환
-  // 3) GET /api/notes/books/{bookId}/ai-note
-  //    → 생성된 AI 독후감 본문(content)을 조회
+  // POST /api/notes/books/{bookId} { phrase, feeling }
   //
-  // 503: AI 서버 연결 실패/타임아웃/오류일 수 있음
+  // 한 책에 여러 번 저장할 수 있음 — 저장할 때마다 목록에 쌓이고,
+  // AI 독서록 생성은 별도 버튼으로 따로 실행함 (아래 handleGenerateAI)
   // =========================
 
-  const handleGenerate = async () => {
-    if (generateLoading) {
+  const [
+    saveNoteLoading,
+    setSaveNoteLoading,
+  ] = useState(false);
+
+  const [saveNoteError, setSaveNoteError] =
+    useState("");
+
+  const handleSaveNote = async () => {
+    if (saveNoteLoading) {
       return;
     }
 
     if (!selectedBook?.bookId) {
-      setGenerateError(
+      setSaveNoteError(
         "먼저 책을 검색해서 선택해주세요."
       );
 
       return;
     }
 
-    setGenerateLoading(true);
-    setGenerateError("");
-    setGenerated(false);
+    if (!ocrText.trim() && !feeling.trim()) {
+      setSaveNoteError(
+        "구절이나 느낀점 중 하나는 입력해주세요."
+      );
+
+      return;
+    }
+
+    setSaveNoteLoading(true);
+    setSaveNoteError("");
 
     try {
       await writeNote(selectedBook.bookId, {
@@ -538,6 +647,67 @@ function AIWrite() {
         { phrase: ocrText, feeling },
       ]);
 
+      // 다음 구절을 이어서 쓸 수 있도록 입력창 비우기
+      setOcrText("");
+      setFeeling("");
+      setImage(null);
+    } catch (error) {
+      console.error(
+        "독서록 저장 오류:",
+        error
+      );
+
+      setSaveNoteError(
+        error.message ||
+          "독서록 저장 중 오류가 발생했습니다."
+      );
+    } finally {
+      setSaveNoteLoading(false);
+    }
+  };
+
+  // =========================
+  // ★ AI 독후감 생성 (백엔드 실제 엔드포인트로 교체)
+  //
+  // 1) POST /api/notes/books/{bookId}/ai-generate
+  //    → 지금까지 저장해둔 독서록들을 전부 취합해 AI 독후감 생성,
+  //      aiNoteId 반환 (구절/느낌을 새로 저장하지 않음, 이미 쌓인
+  //      것들만 사용 — 별도 버튼인 handleSaveNote로 미리 저장해둬야 함)
+  // 2) GET /api/notes/books/{bookId}/ai-note
+  //    → 생성된 AI 독후감 본문(content)/태그(tags)를 조회
+  //
+  // ★ 생성 결과는 이 화면에서 바로 보여줌 (다른 화면으로 이동하지 않음).
+  // 같은 책 카드는 마이페이지 책장에서 다시 눌러도 이 화면으로 들어와서
+  // 방금 생성된 내용을 그대로 다시 보여줌 (위의 미리 불러오기 로직).
+  //
+  // 503: AI 서버 연결 실패/타임아웃/오류일 수 있음
+  // =========================
+
+  const handleGenerateAI = async () => {
+    if (generateLoading) {
+      return;
+    }
+
+    if (!selectedBook?.bookId) {
+      setGenerateError(
+        "먼저 책을 검색해서 선택해주세요."
+      );
+
+      return;
+    }
+
+    if (previousNotes.length === 0) {
+      setGenerateError(
+        "구절이나 느낀점을 먼저 저장해주세요."
+      );
+
+      return;
+    }
+
+    setGenerateLoading(true);
+    setGenerateError("");
+
+    try {
       await generateAiNote(selectedBook.bookId);
 
       const aiNote = await getAiNote(
@@ -546,25 +716,8 @@ function AIWrite() {
 
       setGeneratedText(aiNote?.content || "");
       setAiNoteId(aiNote?.aiNoteId ?? null);
+      setAiNoteTags(aiNote?.tags || []);
       setGenerated(true);
-
-      // ==================================================
-      // ★ 독후감을 완성했다는 건 이 책을 다 읽었다는 뜻이므로
-      // "내가 읽은 책 목록"에도 추가
-      //
-      // POST /api/books/{bookId}/my-list
-      // 이미 추가된 책이어도 실패해서 전체 플로우가 막히지
-      // 않도록 별도로 감싸서 실패는 조용히 무시함
-      // ==================================================
-
-      try {
-        await addToMyBookList(selectedBook.bookId);
-      } catch (addErr) {
-        console.warn(
-          "읽은 책 목록 추가 실패(이미 추가된 책일 수 있음):",
-          addErr
-        );
-      }
     } catch (error) {
       console.error(
         "AI 독후감 생성 오류:",
@@ -657,72 +810,76 @@ function AIWrite() {
         </div>
       </div>
 
-      {/* 책 검색 */}
+      {/* 책 검색 — 책장에서 다시 들어온 경우(preselectedBook)는 검색 UI만 건너뜀 */}
 
       <div className="write-card">
-        <div className="input-label">
-          어떤 책을 읽었나요?
-        </div>
+        {!preselectedBook && (
+          <>
+            <div className="input-label">
+              어떤 책을 읽었나요?
+            </div>
 
-        <div className="book-search">
-          <FiSearch />
+            <div className="book-search">
+              <FiSearch />
 
-          <input
-            placeholder="책 제목 검색하기"
-            value={keyword}
-            onChange={(e) =>
-              setKeyword(e.target.value)
-            }
-          />
-        </div>
+              <input
+                placeholder="책 제목 검색하기"
+                value={keyword}
+                onChange={(e) =>
+                  setKeyword(e.target.value)
+                }
+              />
+            </div>
 
-        {searchLoading && (
-          <div
-            style={{
-              fontSize: "12px",
-              color: "#888",
-              padding: "6px 2px",
-            }}
-          >
-            검색 중...
-          </div>
+            {searchLoading && (
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#888",
+                  padding: "6px 2px",
+                }}
+              >
+                검색 중...
+              </div>
+            )}
+
+            {searchResults.map((book) => (
+              <div
+                key={book.isbn13}
+                className="search-item"
+                onClick={() =>
+                  handleSelectBook(book)
+                }
+              >
+                <div className="search-cover">
+                  {book.coverImageUrl ? (
+                    <img
+                      src={book.coverImageUrl}
+                      alt={book.name}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  ) : (
+                    "📘"
+                  )}
+                </div>
+
+                <div>
+                  <div className="book-name">
+                    {book.name}
+                  </div>
+
+                  <div className="book-author">
+                    {book.writer}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
         )}
-
-        {searchResults.map((book) => (
-          <div
-            key={book.isbn13}
-            className="search-item"
-            onClick={() =>
-              handleSelectBook(book)
-            }
-          >
-            <div className="search-cover">
-              {book.coverImageUrl ? (
-                <img
-                  src={book.coverImageUrl}
-                  alt={book.name}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                  }}
-                />
-              ) : (
-                "📘"
-              )}
-            </div>
-
-            <div>
-              <div className="book-name">
-                {book.name}
-              </div>
-
-              <div className="book-author">
-                {book.writer}
-              </div>
-            </div>
-          </div>
-        ))}
 
         {selectedBook && (
           <div className="book-result">
@@ -933,17 +1090,80 @@ function AIWrite() {
         ></textarea>
       </div>
 
-      {/* 생성 버튼 */}
+      {/* ==================================================
+          구절/느낌 저장하기
+
+          ★ AI 독서록 생성과 분리된 별도 액션.
+          누를 때마다 독서록 하나가 쌓이고, 입력창은 다음
+          구절을 이어서 쓸 수 있도록 비워짐.
+      ================================================== */}
 
       <button
         className="generate-btn"
-        onClick={handleGenerate}
-        disabled={generateLoading}
+        onClick={handleSaveNote}
+        disabled={saveNoteLoading}
+        style={{
+          background: saveNoteLoading
+            ? "#e5e5e5"
+            : "#eef7da",
+          color: saveNoteLoading
+            ? "#999999"
+            : "#5aab35",
+        }}
+      >
+        {saveNoteLoading
+          ? "저장하는 중..."
+          : "📖 이 구절/느낌 저장하기"}
+      </button>
+
+      {saveNoteError && (
+        <div
+          style={{
+            marginTop: "10px",
+            color: "#e57373",
+            fontSize: "13px",
+          }}
+        >
+          {saveNoteError}
+        </div>
+      )}
+
+      {/* ==================================================
+          AI 독서록 생성하기
+
+          ★ 지금까지 저장해둔 구절/느낌들(previousNotes)을
+          전부 취합해서 AI 독서록 하나를 만듦.
+          최소 1개 이상 저장되어 있어야 누를 수 있음.
+      ================================================== */}
+
+      <button
+        className="generate-btn"
+        onClick={handleGenerateAI}
+        disabled={
+          generateLoading ||
+          previousNotes.length === 0
+        }
+        style={{
+          marginTop: "10px",
+        }}
       >
         {generateLoading
-          ? "AI가 독후감을 쓰고 있어요..."
-          : "AI 독후감 생성하기"}
+          ? "AI가 독후감을 쓰고 있어요... (최대 2분 정도 걸릴 수 있어요)"
+          : "✨ AI 독후감 생성하기"}
       </button>
+
+      {previousNotes.length === 0 && (
+        <div
+          style={{
+            marginTop: "8px",
+            fontSize: "12px",
+            color: "#999",
+            textAlign: "center",
+          }}
+        >
+          구절이나 느낌을 먼저 하나 이상 저장해야 AI 독서록을 만들 수 있어요.
+        </div>
+      )}
 
       {generateError && (
         <div
@@ -1041,6 +1261,82 @@ function AIWrite() {
               {generatedText}
             </div>
           )}
+
+          {/* ==================================================
+              오늘의 감정 태그
+
+              ★ 하드코딩 제거 — aiNoteTags(서버 응답의 tags[])를 그대로 씀.
+              2026-08-26 문서 기준 지금은 백엔드가 항상 빈 배열을 주므로,
+              태그가 실제로 채워지기 전까지는 이 섹션이 보이지 않음.
+              백엔드가 태그를 주기 시작하면 별도 수정 없이 바로 나타남.
+          ================================================== */}
+
+          {aiNoteTags.length > 0 && (
+            <div
+              style={{
+                marginTop: "16px",
+                paddingTop: "14px",
+                borderTop: "1px solid #eee",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "13px",
+                  fontWeight: "700",
+                  color: "#666",
+                  marginBottom: "8px",
+                }}
+              >
+                오늘의 감정
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                }}
+              >
+                {aiNoteTags.map((tag, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "999px",
+                      background: "#eef7da",
+                      color: "#6a8c2f",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                    }}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div
+            style={{
+              marginTop: "16px",
+              textAlign: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => navigate("/profile")}
+              style={{
+                border: "none",
+                background: "none",
+                color: "#888",
+                fontSize: "12px",
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              📚 마이페이지 책장에서 보기
+            </button>
+          </div>
         </div>
       )}
     </div>
