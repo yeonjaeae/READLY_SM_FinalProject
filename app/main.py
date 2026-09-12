@@ -12,8 +12,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.api import meeting, preference, review, analysis
 
-app.include_router(analysis.router)  # 이 줄 추가
-
+# app 먼저 정의
 app = FastAPI(title="READLY AI Server")
 
 app.add_middleware(
@@ -43,10 +42,11 @@ async def verify_api_key(request: Request, call_next):
     
     return await call_next(request)
 
+# 라우터는 app 정의 후에 추가
 app.include_router(review.router)
 app.include_router(preference.router)
 app.include_router(meeting.router)
-
+app.include_router(analysis.router)
 
 @app.get("/health")
 async def health():
