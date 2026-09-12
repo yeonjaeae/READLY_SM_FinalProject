@@ -494,6 +494,16 @@ function OtherProfile() {
                     <div
                       key={book.bookId ?? index}
                       className="book-item"
+                      onClick={() =>
+                        navigate("/review", {
+                          state: {
+                            bookId: book.bookId,
+                            memberId: userId,
+                            name: book.title,
+                            coverImageUrl: book.coverImageUrl,
+                          },
+                        })
+                      }
                     >
                       <div
                         className="book-spine"

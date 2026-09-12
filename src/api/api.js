@@ -10,7 +10,12 @@
 // - ResponseEntity<Long> → 상태 200, 바디는 순수 숫자
 // ==================================================
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
+// 배포 환경에 따라 주소가 달라지므로 환경변수로 주입받음.
+// - 로컬 개발: .env.local 에 REACT_APP_API_BASE_URL=http://localhost:8080
+// - Vercel 배포: 프로젝트 Settings → Environment Variables 에 등록
+//   (등록 안 하면 로컬 백엔드 주소로 폴백되어 배포 환경에서는 요청이 실패함)
+const API_BASE_URL =
+  process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
 
 const TOKEN_KEY = "accessToken";
 const MEMBER_ID_KEY = "memberId";
@@ -255,6 +260,16 @@ export function getNotes(bookId) {
 // → { exists, aiNoteId, content, tags, edited } (생성 전이면 exists:false)
 export function getAiNote(bookId) {
   return apiFetch(`/api/notes/books/${bookId}/ai-note`, { method: "GET" });
+}
+
+// 다른 회원의 AI 독서록 조회 (마이페이지 외부, 타인 프로필 책장에서 열람용)
+// ⚠️ 2026-08 기준 백엔드에 아직 없는 엔드포인트 — 요청해둔 상태.
+// 응답 형식은 getAiNote와 동일: { exists, aiNoteId, content, tags, edited }
+export function getMemberAiNote(bookId, memberId) {
+  return apiFetch(
+    `/api/notes/books/${bookId}/members/${memberId}/ai-note`,
+    { method: "GET" }
+  );
 }
 
 // AI 독후감 생성 요청 (내가 그 책에 쓴 독서록들을 취합) → aiNoteId (순수 숫자)

@@ -568,7 +568,7 @@ function Profile() {
                       key={book.bookId ?? index}
                       className="book-item"
                       onClick={() =>
-                        navigate("/write/detail", {
+                        navigate("/review", {
                           state: {
                             bookId: book.bookId,
                             name: book.title,
