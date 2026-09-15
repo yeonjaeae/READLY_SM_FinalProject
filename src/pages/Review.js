@@ -38,6 +38,11 @@ function Review() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // ★ "아직 안 씀"은 에러가 아니라 정상적인 빈 상태라 따로 관리
+  // (빨간 에러 문구로 보이지 않게 분리)
+  const [notWritten, setNotWritten] =
+    useState(false);
+
   useEffect(() => {
     let ignore = false;
 
@@ -50,6 +55,7 @@ function Review() {
 
       setLoading(true);
       setError("");
+      setNotWritten(false);
 
       try {
         const data = memberId
@@ -61,9 +67,7 @@ function Review() {
             setContent(data.content || "");
             setTags(data.tags || []);
           } else {
-            setError(
-              "아직 작성된 독후감이 없어요."
-            );
+            setNotWritten(true);
           }
         }
       } catch (err) {
@@ -143,7 +147,68 @@ function Review() {
         </div>
       )}
 
-      {!loading && !error && (
+      {/* ==================================================
+          아직 독후감을 안 쓴 책 — 에러가 아니라 정상적인 빈 상태이므로
+          차분한 회색 톤 + 안내 문구로 표시 (memberId 없을 때만
+          "쓰러 가기" 버튼 노출 — 남의 책은 대신 써줄 수 없으므로)
+      ================================================== */}
+
+      {notWritten && (
+        <div
+          style={{
+            padding: "60px 20px",
+            textAlign: "center",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "32px",
+              marginBottom: "10px",
+            }}
+          >
+            📖
+          </div>
+
+          <div
+            style={{
+              fontSize: "14px",
+              color: "#999",
+              marginBottom: memberId ? "0" : "16px",
+            }}
+          >
+            아직 이 책의 독후감을 쓰지 않았어요.
+          </div>
+
+          {!memberId && (
+            <button
+              type="button"
+              onClick={() =>
+                navigate("/write/detail", {
+                  state: {
+                    bookId,
+                    name: bookName,
+                    coverImageUrl,
+                  },
+                })
+              }
+              style={{
+                border: "none",
+                borderRadius: "20px",
+                padding: "10px 22px",
+                background: "linear-gradient(135deg, #7bc142, #5aab35)",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: "700",
+                cursor: "pointer",
+              }}
+            >
+              지금 써보기
+            </button>
+          )}
+        </div>
+      )}
+
+      {!loading && !error && !notWritten && (
         <>
           {/* 책 */}
 
@@ -165,7 +230,10 @@ function Review() {
             </div>
 
             <div>
-              <div className="review-book">
+              <div
+                className="review-book"
+                style={{ fontSize: "16px" }}
+              >
                 {bookName}
               </div>
 

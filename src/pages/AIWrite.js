@@ -91,6 +91,13 @@ function AIWrite() {
   const [previousNotes, setPreviousNotes] =
     useState([]);
 
+  // ★ 목록이 길어지면 스크롤이 너무 길어지므로 기본은 3개만 보여주고
+  // "더보기"로 펼침
+  const [showAllNotes, setShowAllNotes] =
+    useState(false);
+
+  const NOTES_PREVIEW_COUNT = 3;
+
   const [
     previousNotesLoading,
     setPreviousNotesLoading,
@@ -352,6 +359,12 @@ function AIWrite() {
   const [ocrError, setOcrError] =
     useState("");
 
+  // ★ "사진에서 텍스트를 추출했어요" 안내는 실제로 사진에서
+  // 뽑아온 경우에만 보여줘야 하므로 별도 플래그로 관리
+  // (사용자가 직접 타이핑하면 false로 꺼짐)
+  const [textFromPhoto, setTextFromPhoto] =
+    useState(false);
+
   // ==================================================
   // ★ 오타 교정
   //
@@ -511,6 +524,7 @@ function AIWrite() {
     setOcrProgress(0);
     setOcrError("");
     setOcrText("");
+    setTextFromPhoto(false);
 
     try {
       let ocrInput = file;
@@ -561,6 +575,7 @@ function AIWrite() {
       }
 
       setOcrText(rawText);
+      setTextFromPhoto(true);
     } catch (error) {
       console.error(
         "OCR 오류:",
@@ -651,6 +666,7 @@ function AIWrite() {
       setOcrText("");
       setFeeling("");
       setImage(null);
+      setTextFromPhoto(false);
     } catch (error) {
       console.error(
         "독서록 저장 오류:",
@@ -957,29 +973,64 @@ function AIWrite() {
                 📚 이 책에 남긴 독서록
               </div>
 
-              {previousNotes.map((note, idx) => (
-                <div
-                  key={note.noteId ?? idx}
+              {previousNotes
+                .slice(
+                  0,
+                  showAllNotes
+                    ? previousNotes.length
+                    : NOTES_PREVIEW_COUNT
+                )
+                .map((note, idx, arr) => (
+                  <div
+                    key={note.noteId ?? idx}
+                    style={{
+                      fontSize: "12px",
+                      color: "#777",
+                      padding: "6px 0",
+                      borderBottom:
+                        idx < arr.length - 1
+                          ? "1px dashed #eee"
+                          : "none",
+                    }}
+                  >
+                    {note.phrase && (
+                      <div>“{note.phrase}”</div>
+                    )}
+                    {note.feeling && (
+                      <div style={{ marginTop: "2px" }}>
+                        {note.feeling}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+              {previousNotes.length >
+                NOTES_PREVIEW_COUNT && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowAllNotes((prev) => !prev)
+                  }
                   style={{
+                    marginTop: "8px",
+                    width: "100%",
+                    border: "none",
+                    background: "none",
+                    color: "#5aab35",
                     fontSize: "12px",
-                    color: "#777",
+                    fontWeight: "700",
+                    cursor: "pointer",
                     padding: "6px 0",
-                    borderBottom:
-                      idx < previousNotes.length - 1
-                        ? "1px dashed #eee"
-                        : "none",
                   }}
                 >
-                  {note.phrase && (
-                    <div>“{note.phrase}”</div>
-                  )}
-                  {note.feeling && (
-                    <div style={{ marginTop: "2px" }}>
-                      {note.feeling}
-                    </div>
-                  )}
-                </div>
-              ))}
+                  {showAllNotes
+                    ? "접기 ▲"
+                    : `더보기 (${
+                        previousNotes.length -
+                        NOTES_PREVIEW_COUNT
+                      }개 더) ▼`}
+                </button>
+              )}
             </div>
           )}
       </div>
@@ -995,11 +1046,10 @@ function AIWrite() {
           className="write-textarea"
           placeholder="기억에 남는 문장을 적어보세요"
           value={ocrText}
-          onChange={(e) =>
-            setOcrText(
-              e.target.value
-            )
-          }
+          onChange={(e) => {
+            setOcrText(e.target.value);
+            setTextFromPhoto(false);
+          }}
         ></textarea>
 
         <input
@@ -1055,7 +1105,7 @@ function AIWrite() {
           </div>
         )}
 
-        {ocrText && !ocrLoading && (
+        {textFromPhoto && ocrText && !ocrLoading && (
           <div
             style={{
               marginTop: "10px",
@@ -1145,11 +1195,33 @@ function AIWrite() {
         }
         style={{
           marginTop: "10px",
+          height: generateLoading ? "52px" : undefined,
+          lineHeight: generateLoading ? "1.4" : undefined,
         }}
       >
-        {generateLoading
-          ? "AI가 독후감을 쓰고 있어요... (최대 2분 정도 걸릴 수 있어요)"
-          : "✨ AI 독후감 생성하기"}
+        {generateLoading ? (
+          <span
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span>AI가 독후감을 쓰고 있어요...</span>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: "400",
+                opacity: 0.8,
+              }}
+            >
+              (최대 2분 정도 걸릴 수 있어요)
+            </span>
+          </span>
+        ) : (
+          "✨ AI 독후감 생성하기"
+        )}
       </button>
 
       {previousNotes.length === 0 && (
@@ -1241,6 +1313,19 @@ function AIWrite() {
                   type="button"
                   onClick={cancelEditAiNote}
                   disabled={aiNoteSaveLoading}
+                  style={{
+                    flex: 1,
+                    height: "40px",
+                    border: "none",
+                    borderRadius: "10px",
+                    background: "#f0f0f0",
+                    color: "#666",
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    cursor: aiNoteSaveLoading
+                      ? "default"
+                      : "pointer",
+                  }}
                 >
                   취소
                 </button>
@@ -1249,6 +1334,23 @@ function AIWrite() {
                   type="button"
                   onClick={handleSaveAiNoteEdit}
                   disabled={aiNoteSaveLoading}
+                  style={{
+                    flex: 1,
+                    height: "40px",
+                    border: "none",
+                    borderRadius: "10px",
+                    background: aiNoteSaveLoading
+                      ? "#e5e5e5"
+                      : "linear-gradient(135deg, #7bc142, #5aab35)",
+                    color: aiNoteSaveLoading
+                      ? "#999"
+                      : "#fff",
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    cursor: aiNoteSaveLoading
+                      ? "default"
+                      : "pointer",
+                  }}
                 >
                   {aiNoteSaveLoading
                     ? "저장 중..."
