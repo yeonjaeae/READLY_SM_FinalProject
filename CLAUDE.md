@@ -1,0 +1,106 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project overview
+
+READLY is a Spring Boot 3.5 backend (Java 17, Gradle) for a book-club/social-reading app. It exposes REST APIs plus a STOMP-over-WebSocket chat feature backed by Redis (both Pub/Sub and storage), with PostgreSQL as the primary datastore via JPA.
+
+## Commands
+
+This project uses the Gradle wrapper — always invoke `gradlew`/`gradlew.bat`, not a system `gradle`.
+
+```powershell
+# Build (compiles + runs tests)
+.\gradlew.bat build
+
+# Run the app locally (needs Postgres and Redis running — see Local dependencies)
+.\gradlew.bat bootRun
+
+# Run all tests
+.\gradlew.bat test
+
+# Run a single test class
+.\gradlew.bat test --tests "com.tricode.READLY.ReadlyApplicationTests"
+
+# Run a single test method
+.\gradlew.bat test --tests "com.tricode.READLY.ReadlyApplicationTests.contextLoads"
+```
+
+There is no linter/formatter configured in the build.
+
+### Local dependencies
+
+`src/main/resources/application.yaml` holds no secrets. Every secret is a `${ENV_VAR}` placeholder, filled either from environment variables or from `src/main/resources/application-local.yaml`, which `spring.config.import` loads optionally and which is gitignored. **After cloning, copy `application-local.yaml.example` to `application-local.yaml` and fill in real values** — without it `bootRun` fails on the unresolved `DB_PASSWORD`, `JWT_SECRET`, `ALADIN_TTB_KEY`, and `AI_API_KEY`. Never put real keys into `application.yaml` or any tracked file. The full variable list is in `README.md`.
+- PostgreSQL: `DB_URL` (default `localhost:5432/readly`), `DB_USERNAME` (default `postgres`), `DB_PASSWORD`. `ddl-auto: update` (schema is auto-migrated from entities — no Flyway/Liquibase, so **dropped/renamed columns are never removed automatically**; see the note under Entity relationships).
+- Redis: `REDIS_HOST`/`REDIS_PORT` (default `localhost:6379`) — used for both chat storage (`@RedisHash`) and the chat Pub/Sub channel `chat-group` (channel name is the constant `RedisSubConfig.CHAT_CHANNEL`, not a config value). Kafka was removed on 2026-08-26; there is no message broker any more.
+- `jwt.secret` (`JWT_SECRET`, 32+ bytes) / `jwt.access-token-validity-in-seconds` — used by `JwtTokenProvider`.
+- `aladin.ttb-key` (`ALADIN_TTB_KEY`) — Aladin book search/lookup.
+- `ai.base-url` (`AI_BASE_URL`, default `http://localhost:8001`) and `ai.api-key` (`AI_API_KEY`) — where the external AI agent service lives, and the shared secret used in **both** directions: we send it as `X-AI-API-KEY` on every request to the AI server, and the AI server must send it back on its chat callback.
+
+Both services (Postgres/Redis) must be reachable for `bootRun`/integration tests to work.
+
+### Deployment
+
+Pushing to the `backend` branch triggers `.github/workflows/deploy.yml`: build the jar (`-x test`), build and push a Docker image to Docker Hub, then SSH into EC2 and recreate the `spring-app` container with `--net=host`, passing secrets as `-e` flags from GitHub Secrets. Postgres runs on the same EC2 host. Those `-e` values are **unquoted** in the SSH script, so a secret containing shell metacharacters (`$`, `&`, `#`, spaces, quotes) is silently altered — compare `docker exec spring-app sh -c 'printf %s "$AI_API_KEY" | sha256sum'` against the intended value when a key "doesn't match". Server logs: `docker logs spring-app`.
+
+## Architecture
+
+### Package layout
+
+Code lives under `com.tricode.READLY`, split into `domain/*` (feature slices) and `global/*` (cross-cutting config). Each domain package follows the same `controller / dto / entity / repository / service` sub-package convention:
+
+- `domain/member` — signup/login, JWT issuance/validation (`jwt/JwtTokenProvider`, `jwt/JwtAuthenticationFilter`), follow relationships.
+- `domain/book` — books, book clubs, membership join entities (`MemberBook`, `MemberBookClub`), book notes, AI-generated notes (`AINote`).
+- `domain/chat` — real-time chat pipeline (see below).
+- `global/config` — `SecurityConfig`, `RedisSubConfig`, `RedisRepositoryConfig`, `WebSocketConfig`, `StompAuthChannelInterceptor`, `RestTemplateConfig`. The last one defines **two** `RestTemplate` beans: `restTemplate` (3s connect / 10s read — Aladin) and `aiRestTemplate` (`ai.connect-timeout-seconds` / `ai.read-timeout-seconds`, default 10s/120s). AI calls take tens of seconds (LLM generation plus cold start) and were timing out on the 10s limit; Aladin keeps the short timeout so a search outage fails fast. Injection is **by field name** — name the field `aiRestTemplate` to get the slow one, `restTemplate` for the fast one; any other name fails at startup. **Never put `@Primary` on either bean**: Spring prefers `@Primary` over the parameter name, so every `aiRestTemplate` field silently received the 10s bean and AI calls were cut off at exactly 10s (known-issues #26). Both are built by `http11Builder()`, which pins the JDK `HttpClient` to HTTP/1.1: its HTTP/2 default adds `Upgrade: h2c` on `http://` URLs, which uvicorn (the AI server) answers with an immediate `400 Invalid HTTP request received.` while still logging 200 on its side (known-issues #25). Don't build a `RestTemplate` with a bare `new RestTemplateBuilder()`.
+- `global/exception` — `GlobalExceptionHandler` (`@RestControllerAdvice`) maps `IllegalArgumentException`→400, `MethodArgumentNotValidException`→400 (with the offending field names and messages), `IllegalStateException`→409, `ForbiddenException`→403, `AiServerException`→503, anything else→500 with a generic message. Anything not listed here falls into that last bucket, so a new exception type needs a handler or it silently becomes a 500.
+
+DTOs are grouped as nested records inside a single `*Dto` class per domain (e.g. `MemberDto.SignUpRequest`, `MemberDto.TokenResponse`) rather than one file per request/response type.
+
+### Chat pipeline (Redis Pub/Sub → Redis storage → WebSocket, plus an AI agent hop)
+
+This is the most cross-cutting flow in the codebase — trace it across packages when touching chat:
+
+1. A message enters via either `ChatController`'s REST endpoint (`POST /api/book-clubs/{clubId}/chats`, used only by the AI agent to post replies — see Auth) or its STOMP endpoint (`@MessageMapping("/chat/clubs/{clubId}")`, used by normal users over `/ws/chat`). Neither endpoint takes a `memberId` in the request body: the AI REST endpoint always sends as the fixed `ChatService.AI_MEMBER_ID` (`999L`), and the STOMP endpoint reads the sender from the authenticated STOMP session (set during `CONNECT`, see Auth) — this prevents spoofing another member.
+2. `ChatService.sendMessage` first checks the sender is actually a member of that `BookClub` (via `MemberBookClubRepository`, skipped for the AI member), then builds a `ChatMessage` and hands it to `ChatProducer`, which publishes it to the Redis Pub/Sub channel `chat-group` (`RedisTemplate.convertAndSend`, JSON via the `Jackson2JsonRedisSerializer<ChatMessage>` bean in `RedisSubConfig` — that serializer registers `JavaTimeModule`, without which `createdAt` breaks).
+3. `ChatConsumer` (a `MessageListener` registered on the `RedisMessageListenerContainer` in `RedisSubConfig`, not an annotation-driven listener) picks it up and does three things in sequence: persists it to Redis via `ChatMessageRepository` (a Spring Data Redis `CrudRepository`, `@RedisHash` with a 7-day TTL, `clubId` is `@Indexed` for lookup), broadcasts it to STOMP subscribers at `/sub/chat/clubs/{clubId}` (subscribing is membership-checked in `StompAuthChannelInterceptor` — see Auth), and — unless the sender is `ChatService.AI_MEMBER_ID` — forwards it via `RestTemplate` to the external AI agent service at `{ai.base-url}/api/ai/chat`. **That third step is currently commented out** (2026-08-26): the deployed AI server has no `/api/ai/chat`, so every message produced a 404 and a stack trace. `sendToAiAgent` and its call site are left in place, commented, to be re-enabled when that endpoint exists — see known-issues #20. Do not delete them.
+4. The AI service is expected to reply by calling back into the REST endpoint in step 1, closing the loop. With step 3 disabled this loop never starts on its own; the only way the AI currently speaks is the host-triggered endpoint in step 5.
+5. Separately, `ChatController`'s `POST /api/book-clubs/{clubId}/meeting/assist` lets **the club's host** ask the AI to actively intervene: `ChatService.requestMeetingAssist` checks the caller is the host (`validateClubHost`), pulls up to the last 50 messages for that club out of Redis (sorted by `createdAt`, nulls-last), and POSTs them together with the book title to `{ai.base-url}/api/meeting/assist` as `{ "book_title", "chat_history": [{ "speaker", "text" }], "mode" }` — the shape that server requires. The reply is published back into the room as the AI member, so it reaches clients over STOMP rather than in this call's response body. This is the **only** endpoint that calls the AI's assist API; a second host-only `POST /api/book-clubs/{clubId}/ai-assist` used to exist and was deleted once the two were merged, so do not reintroduce a participant-facing variant.
+6. Writes are gated by a **chat window**: `ChatService.validateChatWindow` allows sends only from 15 minutes before the club's `creationDate`/`creationTime` until 15 minutes after the 30-minute meeting ends (a 60-minute window). Outside it, sends throw `IllegalStateException` → 409 on REST, and on STOMP `ChatController.handleSendRejected` (`@MessageExceptionHandler` + `@SendToUser("/sub/errors")`) pushes the reason to the sender's `/user/sub/errors` — without it a rejected STOMP send is silently dropped. The gate is deliberately backend-only: no state is handed to the frontend or the AI server, and it applies to the AI member too so there is no bypass path. Clubs with a null date/time (legacy rows) skip the check. **Reads are never gated** — history must stay available for 7 days.
+7. STOMP delivers only messages published *after* a client subscribes, so past conversation comes from a separate REST call: `GET /api/book-clubs/{clubId}/chats` (`ChatService.getChatHistory`) returns every message still in Redis for that club, sorted by `createdAt`. Because `ChatMessage`'s TTL is 7 days, "what is still there" *is* the last 7 days — there is no date filter. Members must be able to see that history after re-entering a room, so shortening the TTL or removing this endpoint breaks a product requirement. Only joined members may call it (same `validateClubMember` gate as sending).
+
+Note `ChatMessage` is a **Redis-hash entity** (`org.springframework.data.redis`), not a JPA entity — despite living next to JPA entities in other domains, it has no SQL table. Its sibling `ChatArchive` **is** a JPA entity (`chat_archive`) and holds the same message after Redis drops it.
+
+### Chat message lifecycle (Redis 7 days → PostgreSQL 30 days)
+
+`ChatMessage` lives in Redis for 7 days (`@RedisHash(timeToLive = 604800)`), which is what `GET .../chats` reads. When that key expires, `ChatArchiveService.archiveExpiredChatMessage` copies it into `chat_archive` (PostgreSQL) stamped with `archivedAt`, and `purgeExpiredArchives` (a `@Scheduled` job, default 04:00 daily) deletes archived rows older than `chat.archive.retention-days` (30). Total retention is therefore ~37 days, and the 30 days are counted **from the archive write, not from the message**.
+
+The expiry hook depends on `RedisRepositoryConfig`: `@EnableRedisRepositories(enableKeyspaceEvents = ON_STARTUP)` makes Spring subscribe to Redis keyspace notifications (it also issues `CONFIG SET notify-keyspace-events`) and keep a *phantom* copy of every hash so `RedisKeyExpiredEvent.getValue()` still carries the vanished entity. Consequences to keep in mind: declaring that annotation turns off Boot's auto-configured Redis repositories, so `basePackages` must keep covering `domain/chat/repository`; every chat message costs one extra Redis key; a managed Redis that forbids `CONFIG` needs `notify-keyspace-events` set server-side; and expiries that happen while the app is down are never delivered, so those messages are lost rather than archived. Archiving is idempotent (the message UUID is the `chat_archive` PK). There is no read API over `chat_archive` yet — it is retention only. The `@RedisHash` storage path uses Spring Data Redis' own converters, so it is unaffected by the Pub/Sub serializer above; the two paths share a Redis server but nothing else.
+
+Since publisher and subscriber are the same application, Pub/Sub buys exactly one thing: the AI HTTP call in step 3 runs off the request thread. Redis Pub/Sub has no persistence, so a message in flight during a restart is lost — accepted because a club is a single ~30-minute session. It fans out to every subscribed instance, which is what a broadcast needs if the app is ever scaled out (a Kafka consumer group would have delivered to only one instance).
+
+### Auth
+
+`SecurityConfig` disables CSRF, sets stateless sessions, and requires authentication on everything except: `/api/members/signup`, `/api/members/login`, and `POST /api/book-clubs/*/chats` (the AI callback endpoint — see below). `JwtAuthenticationFilter` (`domain/member/jwt`) is registered ahead of `UsernamePasswordAuthenticationFilter`; it reads the `Authorization: Bearer <token>` header, validates it via `JwtTokenProvider`, and sets a `SecurityContext` authentication whose **principal is the raw `memberId` (`Long`)** — not a `UserDetails`. Controllers read the caller's id with `@AuthenticationPrincipal Long memberId`.
+
+Two things sit outside that HTTP filter chain and are authenticated separately:
+- **STOMP/WebSocket** (`/ws/chat`) doesn't go through Spring Security's HTTP filters. `StompAuthChannelInterceptor` (`global/config`) instead validates the `Authorization` header on the STOMP `CONNECT` frame and attaches the resulting principal to the session; `ChatController.sendWebSocketMessage` reads it back off `Principal`. A missing/invalid token rejects the `CONNECT` outright. The same interceptor also gates `SUBSCRIBE`: destinations starting with `/sub/chat/clubs/` have their `clubId` parsed out and checked against `MemberBookClubRepository.existsByMemberIdAndBookClubId`, so a logged-in non-member can no longer eavesdrop on a club by guessing its (sequential) id. Other destinations pass through unchecked. Note the HTTP handshake itself (`/ws/chat/**`) is `permitAll`'d — browsers cannot put an `Authorization` header on a WebSocket/SockJS handshake, so all socket auth happens on STOMP frames.
+- **The AI agent's callback** (`POST /api/book-clubs/{clubId}/chats`) has no member JWT to present, so it's `permitAll`'d in `SecurityConfig` and instead checked in `ChatController` against a shared secret sent as the `X-AI-API-KEY` header (`ai.api-key` in config).
+
+### Entity relationships
+
+- `Member` ↔ `Member` self-relationship via `Follow` (follower/following); `Follow.createdAt` is set in a `@PrePersist` hook. `Member.increaseFollowerCount()` / `increaseFollowingCount()` are called from `MemberService.followUser` to keep the counters in sync.
+- `Member` ↔ `Book` via `MemberBook` (join entity — a member's reading list). Built via `MemberBook.builder()` (`BookService.addBookToMyList`).
+- Books are only ever created through **search → pick → register**, never by hand: `GET /api/books/search?keyword=` proxies Aladin's ItemSearch and stores nothing, and `POST /api/books` takes a body of exactly `{ "isbn13": "..." }` (`@NotBlank`, so a missing value is a 400) and delegates to `BookService.getOrCreateBookByIsbn13`, which reuses an existing row or fetches the full record from Aladin's ItemLookUp. `BookDto.CreateRequest` deliberately carries no title/author/cover fields — leaving them would reopen the manual-entry path that produced `isbn13`-less duplicate rows. Consequently a `book` row appears at exactly one moment: when the user picks a search result. Book notes and book clubs only ever look a book up by `bookId`, so the frontend must register first. `GET /api/books/isbn/{isbn13}` predates this and does the same thing as `POST /api/books`; it is redundant but still present.
+- `Member` ↔ `BookClub` via `MemberBookClub` (join entity — club membership). Built via `MemberBookClub.builder()` (`BookClubService.createBookClub` auto-joins the creator; `BookClubService.joinBookClub` handles everyone else, enforcing capacity/status/duplicate checks).
+- `BookClub` has a `PassionType` enum (`PASSIONATE`/`MODERATE`/`CALM`), a `ClubStatus` enum (`PENDING`/`IN_PROGRESS`/`COMPLETED`), and a nullable `ManyToOne` to `Book` (set from `CreateRequest.bookId()` at creation — nullable because it wasn't always populated, so treat it defensively when reading; a *new* club must still pick a book, and `createBookClub` rejects a null `bookId` with a 400).
+- `BookClub` also has a nullable `ManyToOne` to `Member` named `host` (column `host_id`) — the club's leader. Use **`host`/`participant`** for this concept everywhere (field, method, enum constant, API `role` value); do not introduce `leader`/`owner`/`admin` synonyms, since the frontend expects `role: "HOST" | "PARTICIPANT"`. `createBookClub` sets `host` to the caller. This replaces an older implicit rule where the lowest-`id` `MemberBookClub` row was treated as the leader; that rule silently promoted the next member when the leader left, so it was removed along with `MemberBookClubRepository.findFirstByBookClubIdOrderByIdAsc`. `host` is nullable only for clubs created before the column existed — `ChatService.validateClubHost` throws rather than falling back to the old rule, so those rows need the backfill below. Callers learn their own role from `BookClubDto.ClubRole` on `GET /api/book-clubs/{clubId}` (members only, so the value is always exact) and on `GET /api/book-clubs/my-list`; the home list `GET /api/book-clubs` leaves `role` null because it also contains clubs the caller has not joined.
+- `BookNote` belongs to a `Book` and a `Member` — lightweight per-passage notes (`phrase`/`feeling`), created via `BookNoteService.createBookNote`.
+- `AINote` is a **separate entity** from `BookNote` (`domain/book/entity/AINote.java`), one per `(book_id, member_id)` pair (enforced by a unique constraint). `BookNoteService.generateAiBookNote` aggregates a member's `BookNote`s for a book, POSTs them to `{ai.base-url}/api/review/generate`, and writes/refreshes the single `AINote` for that pair. That request body must use snake_case (`book_title`) — the AI server rejects `bookTitle` with a 422, which surfaced as a permanent 503 until 2026-08-26 (known-issues #21); the same rule already applies to the chat assist call, so keep `@JsonProperty` on any new field sent to the AI server. The AI server's review reply carries only `review`, no `tags`; tags come from a second call, `POST {ai.base-url}/api/analysis/emotion-tags` with the generated review, and a failure there is swallowed so the review is still saved without tags. Another member's AI note is readable by any logged-in user via `GET /api/notes/books/{bookId}/members/{memberId}/ai-note` (no follow check). `updateAiBookNote` lets the member edit the note directly. `AINote.edited` distinguishes AI-original content from member-edited content — not to be confused with the removed `BookNote.isAiGenerated`/`aiContent` fields, which used to hold AI content inline on `BookNote` before this split (see migration note below).
+
+**Migration note**: because `ddl-auto: update` never drops columns, splitting `AINote` out of `BookNote` left `book_note.is_ai_generated`/`ai_content` behind as orphaned NOT-NULL columns that block inserts. `db/2026-08-08-split-ainote-from-booknote.sql` is a one-time script to backfill `ai_note` from the old rows and drop those columns — run it once against a database that predates this change. Any future entity field removal/rename will hit the same issue and needs the same treatment (manual SQL, since there's no Flyway/Liquibase). The mirror-image problem — `ddl-auto: update` adds a column but leaves existing rows NULL — needs the same treatment: `db/2026-08-17-add-bookclub-host.sql` backfills `book_club.host_id` from the lowest-`id` `member_book_club` row (the rule the code used to apply implicitly) and adds the FK, and `db/2026-08-17-backfill-book-isbn13.sql` fills `book.isbn13` on rows that predate the Aladin integration. That second one is deliberately **semi-automatic**: ISBNs only exist at Aladin and we hold just title/author, so the `(book_id, isbn13)` mapping is hand-entered into the script rather than title-matched (same title, different publisher/edition would mis-link other members' notes irreversibly). It then merges each NULL row into the row that already owns that ISBN, moving `member_book`/`book_club`/`book_note`/`ai_note` references and dropping rows that would violate the `(book_id, member_id)` uniqueness on `ai_note`/`member_book`.
+
+### Language
+
+Code comments, commit messages, and some identifiers are in Korean; the team is Korean-speaking. Match existing comment language when editing nearby code. Open issues and cross-session work state are tracked in `docs/known-issues.md`; API contracts for the frontend are in `docs/api-spec.md`.

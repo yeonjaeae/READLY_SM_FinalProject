@@ -4,6 +4,8 @@ import com.tricode.READLY.domain.book.dto.BookNoteDto;
 import com.tricode.READLY.domain.book.entity.AINote;
 import com.tricode.READLY.domain.book.entity.Book;
 import com.tricode.READLY.domain.book.entity.BookNote;
+import com.tricode.READLY.domain.book.entity.MemberBook;
+import com.tricode.READLY.domain.book.repository.MemberBookRepository;
 import com.tricode.READLY.domain.book.repository.AINoteRepository;
 import com.tricode.READLY.domain.book.repository.BookRepository;
 import com.tricode.READLY.domain.book.repository.BookNoteRepository;
@@ -34,11 +36,16 @@ public class BookNoteService {
     private final AINoteRepository aiNoteRepository;
     private final BookRepository bookRepository;
     private final MemberRepository memberRepository;
+    private final MemberBookRepository memberBookRepository;
     // AI 전용 RestTemplate (타임아웃이 긴 빈). 필드 이름으로 주입 대상이 정해진다 - RestTemplateConfig 참고
     private final RestTemplate aiRestTemplate;
 
     @Value("${ai.base-url}")
     private String aiBaseUrl;
+
+    // AI 서버가 요구하는 사전 공유 키. 우리가 AI 콜백을 검사할 때 쓰는 값과 같은 키를 반대 방향으로도 쓴다.
+    @Value("${ai.api-key}")
+    private String aiApiKey;
 
     /**
      * 각 책에다 가볍게 독서록 남기기 (카메라 텍스트 인식 혹은 직접 입력)
@@ -50,6 +57,14 @@ public class BookNoteService {
                 .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 책입니다."));
         Member member = memberRepository.findById(memberId)
                 .orElseThrow(() -> new IllegalArgumentException("회원을 찾을 수 없습니다."));
+
+        // 독서록을 남긴 책은 자동으로 내 책장에 담는다
+        if (!memberBookRepository.existsByMemberIdAndBookId(memberId, bookId)) {
+        memberBookRepository.save(MemberBook.builder()
+                .member(member)
+                .book(book)
+                .build());
+        }
 
         BookNote bookNote = BookNote.builder()
                 .book(book)
@@ -82,6 +97,18 @@ public class BookNoteService {
     }
 
     /**
+     * 다른 회원의 프로필에서 그 회원이 그 책에 쓴 AI 독서록 보기
+     *      AI 독서록은 공개 정보라 팔로우 여부를 따지지 않는다.
+     *      없으면 본인 조회와 마찬가지로 빈 응답을 준다.
+     */
+    public BookNoteDto.AiNoteResponse getMemberAiBookNote(Long bookId, Long memberId) {
+        if (!memberRepository.existsById(memberId)) {
+            throw new IllegalArgumentException("회원을 찾을 수 없습니다.");
+        }
+        return getMyAiBookNote(bookId, memberId);
+    }
+
+    /**
      * 기존 독서록들을 기반으로 AI에게 하나의 통합 독서록(AINote) 써달라고 하기
      *      책+회원당 AINote는 하나이므로, 이미 있으면 내용을 갱신한다.
      */
@@ -98,8 +125,11 @@ public class BookNoteService {
             throw new IllegalStateException("AI 독서록을 만들려면 독서록이 최소 1개 필요합니다.");
         }
 
-        // 독서록 전체를 AI 서버로 보내 독후감 본문과 성향 태그를 한 번에 받아온다
+        // 1단계: 독서록 전체를 AI 서버로 보내 독후감 본문을 받아온다
         BookNoteDto.ReviewGenerateResponse aiResult = generateReview(book.getName(), existingNotes);
+
+        // 2단계: 받은 독후감 본문을 다시 보내 감정 태그를 받아온다 (AI 서버가 두 경로로 나눠 두었다)
+        List<String> emotionTags = analyzeEmotionTags(aiResult.review());
 
         // AI 호출이 성공한 뒤에 AINote를 만든다 (실패했는데 빈 행만 남는 것을 막는다)
         AINote aiNote = aiNoteRepository.findByBookIdAndMemberId(bookId, memberId)
@@ -109,7 +139,7 @@ public class BookNoteService {
                         .build()));
 
         aiNote.applyAiContent(aiResult.review()); // 기존 AINote면 더티 체킹으로 갱신
-        aiNote.applyTags(joinTags(aiResult.tags()));
+        aiNote.applyTags(joinTags(emotionTags));
         return aiNote.getId();
     }
 
@@ -124,6 +154,13 @@ public class BookNoteService {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-AI-API-KEY", aiApiKey); // AI 서버 필수 헤더. 없으면 401이 돌아온다
+        // TODO 임시 진단 로그: AI 담당자와 키 일치 여부 확인용. 원인을 찾으면 삭제한다.
+        //      키 원문이 docker logs에 남지 않도록 길이와 앞뒤 2글자만 찍는다.
+        String sentKey = headers.getFirst("X-AI-API-KEY");
+        log.info("AI API KEY 길이={}, 앞뒤={}...{}", sentKey == null ? null : sentKey.length(),
+                sentKey == null ? null : sentKey.substring(0, Math.min(2, sentKey.length())),
+                sentKey == null ? null : sentKey.substring(Math.max(0, sentKey.length() - 2)));
         HttpEntity<BookNoteDto.ReviewGenerateRequest> requestEntity =
                 new HttpEntity<>(new BookNoteDto.ReviewGenerateRequest(bookTitle, noteItems), headers);
 
@@ -140,6 +177,29 @@ public class BookNoteService {
         }
 
         return response;
+    }
+
+    /**
+     * 생성된 독후감 본문을 AI 서버에 보내 감정 태그("감동", "슬픔" 같은 2~4글자)를 받아온다.
+     *
+     * 독후감 본문과 달리 태그는 부가 정보다. 여기서 실패해도 이미 받아 둔 독후감까지 버리면
+     * 사용자가 잃는 것이 더 크므로, 예외를 삼키고 태그 없이 저장한다(known-issues #3의 방침과 같다).
+     */
+    private List<String> analyzeEmotionTags(String review) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-AI-API-KEY", aiApiKey);
+        HttpEntity<BookNoteDto.EmotionTagsRequest> requestEntity =
+                new HttpEntity<>(new BookNoteDto.EmotionTagsRequest(review), headers);
+
+        try {
+            BookNoteDto.EmotionTagsResponse response = aiRestTemplate.postForObject(
+                    aiBaseUrl + "/api/analysis/emotion-tags", requestEntity, BookNoteDto.EmotionTagsResponse.class);
+            return response == null ? null : response.tags();
+        } catch (RestClientException e) {
+            log.warn("감정 태그 분석 실패, 태그 없이 저장한다", e);
+            return null;
+        }
     }
 
     // 태그는 부가 정보라서 없으면 null로 두고 독후감만 저장한다

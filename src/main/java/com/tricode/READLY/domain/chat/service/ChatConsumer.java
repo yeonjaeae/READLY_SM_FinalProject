@@ -35,6 +35,10 @@ public class ChatConsumer implements MessageListener {
     @Value("${ai.base-url}")
     private String aiBaseUrl;
 
+    // AI 서버가 요구하는 사전 공유 키. 지금은 호출부가 주석 처리돼 있지만 되살릴 때 필요하다.
+    @Value("${ai.api-key}")
+    private String aiApiKey;
+
     // Redis 구독 콜백. 페이로드를 ChatMessage로 되돌린 뒤 기존 처리 흐름을 그대로 탄다.
     @Override
     public void onMessage(Message redisMessage, byte[] pattern) {
@@ -80,6 +84,7 @@ public class ChatConsumer implements MessageListener {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("X-AI-API-KEY", aiApiKey); // AI 서버 필수 헤더. 없으면 401이 돌아온다
 
             // AI 서버로 보낼 JSON 데이터 구조체 생성
             AiMessageRequest requestBody = new AiMessageRequest(

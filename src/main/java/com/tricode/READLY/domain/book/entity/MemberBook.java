@@ -7,6 +7,7 @@ import lombok.*;
 
 // Member - Book 매핑 (예: 회원이 찜한 책, 읽은 책 등)
 @Entity
+@Table(uniqueConstraints = @UniqueConstraint(columnNames = {"member_id", "book_id"}))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor

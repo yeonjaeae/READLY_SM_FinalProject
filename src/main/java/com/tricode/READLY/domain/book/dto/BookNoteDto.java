@@ -67,9 +67,22 @@ public class BookNoteDto {
             String feeling
     ) {}
 
-    // AI 서버가 생성해 준 독후감 본문과 성향 태그
+    // AI 서버가 생성해 준 독후감 본문.
+    // tags는 이 응답에 오지 않는다(2026-09-13 AI 담당자 확인). 감정 태그는 아래 emotion-tags를 따로 호출해 받는다.
+    // 필드를 남겨 둔 이유는 AI 서버가 나중에 함께 내려주더라도 깨지지 않게 하기 위해서다.
     public record ReviewGenerateResponse(
             String review,
+            List<String> tags
+    ) {}
+
+    // 감정 태그 요청 (POST /api/analysis/emotion-tags)
+    // 생성된 독후감 본문을 그대로 보내면 "감동", "슬픔" 같은 2~4글자 태그가 돌아온다.
+    public record EmotionTagsRequest(
+            String review
+    ) {}
+
+    // 감정 태그 응답
+    public record EmotionTagsResponse(
             List<String> tags
     ) {}
 }

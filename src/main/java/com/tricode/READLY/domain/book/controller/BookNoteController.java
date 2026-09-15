@@ -53,6 +53,17 @@ public class BookNoteController {
     }
 
     /**
+     * 기능: 다른 회원의 프로필에서 그 회원이 그 책에 쓴 AI 독서록 보기 (없으면 exists=false)
+     */
+    @GetMapping("/books/{bookId}/members/{memberId}/ai-note")
+    public ResponseEntity<BookNoteDto.AiNoteResponse> getMemberAiBookNote(
+            @PathVariable Long bookId,
+            @PathVariable Long memberId) {
+
+        return ResponseEntity.ok(bookNoteService.getMemberAiBookNote(bookId, memberId));
+    }
+
+    /**
      * 기능: 하나의 책에 대한 여러 독서록들을 기반으로 AI에게 독서록 써달라고 요청
      */
     @PostMapping("/books/{bookId}/ai-generate")

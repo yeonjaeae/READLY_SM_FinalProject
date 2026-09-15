@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "backend" ]
+
+jobs:
+  build-and-deploy:
+    # 이 파일은 PR로 부모 저장소(yeonjaeae)에도 머지된다. 거기엔 EC2 비밀값이 없어 배포가 실패하므로
+    # 포크(leekj9633)에서만 실행한다. 부모에서는 skipped로 끝나 파일을 지울 필요가 없다.
+    if: github.repository == 'leekj9633/READLY_SM_FinalProject'
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. JDK 17 설정
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+
+      # 3. Gradle 빌드
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew clean build -x test
+
+      # 4. Docker 이미지 빌드 및 Docker Hub 푸시
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-spring-app:latest .
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-spring-app:latest
+
+      # 5. EC2에 SSH 접속 후 컨테이너 실행
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/my-spring-app:latest
+            docker stop spring-app || true
+            docker rm spring-app || true
+            docker run -d \
+              --name spring-app \
+              --restart unless-stopped \
+              --net="host" \
+              -e DB_URL=jdbc:postgresql://localhost:5432/mydb \
+              -e DB_USERNAME=myuser \
+              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              -e ALADIN_TTB_KEY=${{ secrets.ALADIN_TTB_KEY }} \
+              -e CORS_ALLOWED_ORIGINS="${{ secrets.CORS_ALLOWED_ORIGINS }}" \
+              -e AI_BASE_URL=${{ secrets.AI_BASE_URL }} \
+              -e AI_API_KEY=${{ secrets.AI_API_KEY }} \
+              ${{ secrets.DOCKER_USERNAME }}/my-spring-app:latest

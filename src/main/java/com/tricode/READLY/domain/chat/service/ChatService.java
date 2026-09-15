@@ -45,6 +45,10 @@ public class ChatService {
     @Value("${ai.base-url}")
     private String aiBaseUrl;
 
+    // AI 서버가 요구하는 사전 공유 키. AI 콜백을 검사할 때 쓰는 값과 같은 키를 반대 방향으로도 쓴다.
+    @Value("${ai.api-key}")
+    private String aiApiKey;
+
     private static final int RECENT_MESSAGE_LIMIT = 50; // AI에게 넘길 최근 대화 개수 제한
 
     // 채팅방 활성화 윈도우: 모임 시작 15분 전에 열리고, 30분짜리 모임이 끝난 뒤 15분 뒤에 닫힌다(총 60분).
@@ -135,6 +139,7 @@ public class ChatService {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-AI-API-KEY", aiApiKey); // AI 서버 필수 헤더. 없으면 401이 돌아온다
         HttpEntity<ChatDto.MeetingAssistApiRequest> requestEntity = new HttpEntity<>(requestBody, headers);
 
         // 사용자가 버튼을 눌러 발생한 동기 요청이다. 실패를 삼키고 200을 주면

@@ -59,7 +59,7 @@ copy src\main\resources\application-local.yaml.example src\main\resources\applic
 | `REDIS_PASSWORD` | N | 빈 값 | Redis 비밀번호 |
 | `JWT_SECRET` | Y | 없음 | JWT 서명 키 (32바이트 이상) |
 | `ALADIN_TTB_KEY` | Y | 없음 | 알라딘 Open API 키 |
-| `AI_BASE_URL` | N | `http://localhost:8001` | 외부 AI 에이전트 서버 주소 |
+| `AI_BASE_URL` | N | `http://{EC2 배포 주소}:8001` | 외부 AI 에이전트 서버 주소 |
 | `AI_API_KEY` | N | `default-readly-key` | AI 서버가 콜백 시 보내야 하는 공유 비밀키 |
 | `AI_CONNECT_TIMEOUT_SECONDS` | N | `10` | AI 서버 연결 타임아웃 |
 | `AI_READ_TIMEOUT_SECONDS` | N | `120` | AI 서버 응답 대기 타임아웃 (LLM 생성이 오래 걸려 길게 잡는다) |
