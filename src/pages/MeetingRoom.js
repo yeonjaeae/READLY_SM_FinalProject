@@ -1,7 +1,7 @@
 // src/pages/MeetingRoom.js
 
-import { useLocation } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 
 import {
   getBookClubDetail,
@@ -21,6 +21,7 @@ const AI_MEMBER_ID = 999;
 
 function MeetingRoom() {
   const location = useLocation();
+  const navigate = useNavigate();
 
   // ==================================================
   // Community에서 전달받은 최소 정보
@@ -148,6 +149,7 @@ function MeetingRoom() {
 
   const mapServerMessage = (m) => ({
     id: m.messageId,
+    memberId: m.memberId,
     user: m.senderName,
     type:
       m.memberId === AI_MEMBER_ID
@@ -247,6 +249,79 @@ function MeetingRoom() {
   // ==================================================
 
   const chatAreaRef = useRef(null);
+
+  // ==================================================
+  // ★ 하단 고정 요소(입력창 / AI버튼 / 전송거부 배너) 높이를
+  // 실제로 측정해서 채팅 영역 padding-bottom을 계산함.
+  //
+  // 예전에는 "입력창 74px, AI버튼 60px" 식으로 눈대중 값을 하드코딩
+  // 했는데, 실제 렌더링된 높이가 그 값이랑 안 맞으면 마지막 메시지가
+  // 입력창 뒤로 가려지는 문제가 생김. 그래서 ref로 실측하도록 변경.
+  // ==================================================
+
+  const NAV_HEIGHT = 72; // 하단 네비게이션 고정 높이 (공용 컴포넌트, 상수로 간주)
+
+  const inputWrapRef = useRef(null);
+  const aiBarRef = useRef(null);
+  const sendErrorRef = useRef(null);
+
+  const [inputWrapHeight, setInputWrapHeight] =
+    useState(74);
+
+  const [aiBarHeight, setAiBarHeight] =
+    useState(0);
+
+  const [sendErrorHeight, setSendErrorHeight] =
+    useState(0);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      if (inputWrapRef.current) {
+        setInputWrapHeight(
+          inputWrapRef.current.offsetHeight
+        );
+      }
+
+      setAiBarHeight(
+        aiBarRef.current
+          ? aiBarRef.current.offsetHeight
+          : 0
+      );
+
+      setSendErrorHeight(
+        sendErrorRef.current
+          ? sendErrorRef.current.offsetHeight
+          : 0
+      );
+    };
+
+    measure();
+
+    window.addEventListener("resize", measure);
+
+    return () => {
+      window.removeEventListener("resize", measure);
+    };
+    // isHost/roleLoading이 바뀌면 AI버튼 유무가, aiError/sendError가
+    // 바뀌면 배너 높이가 바뀌므로 그때마다 다시 측정
+  }, [isHost, roleLoading, aiError, sendError]);
+
+  // 입력창(72) + AI버튼(방장일 때만) + 전송거부 배너(뜰 때만) + 여유 12px
+  const chatBottomPadding =
+    NAV_HEIGHT +
+    inputWrapHeight +
+    aiBarHeight +
+    sendErrorHeight +
+    12;
+
+  // AI버튼/전송거부 배너는 서로 겹치지 않게 쌓아 올라가야 하므로
+  // 각자의 fixed "bottom" 값도 실측한 높이 기준으로 계산
+  const aiBarBottom = NAV_HEIGHT + inputWrapHeight;
+
+  const sendErrorBottom =
+    NAV_HEIGHT +
+    inputWrapHeight +
+    (isHost && !roleLoading ? aiBarHeight : 0);
 
   // ==================================================
   // 메시지 추가 → 채팅 영역만 부드럽게 맨 아래로 스크롤
@@ -431,20 +506,14 @@ function MeetingRoom() {
           boxSizing: "border-box",
 
           // ------------------------------------------
-          // 하단 고정 요소(입력창 / AI버튼)에
-          // 마지막 메시지가 가려지지 않도록 여백 확보
+          // 하단 고정 요소(입력창 / AI버튼 / 전송거부 배너)에
+          // 마지막 메시지가 가려지지 않도록 여백 확보.
           //
-          // 네비(72px) + 입력창(~74px)
-          //           + (방장이면) AI버튼(~60px)
-          //
-          // ★ isHost가 로딩 전이라 아직 확정되지 않았을 수 있으니
-          // roleLoading 중에는 넉넉하게 host 기준 여백을 사용
+          // ★ 실측한 높이(chatBottomPadding, 위에서 계산) 사용.
+          // 예전처럼 픽셀 값을 눈대중으로 하드코딩하지 않음.
           // ------------------------------------------
 
-          padding:
-            isHost || roleLoading
-              ? "15px 14px 216px"
-              : "15px 14px 156px",
+          padding: `15px 14px ${chatBottomPadding}px`,
         }}
       >
         {historyLoading && (
@@ -473,16 +542,33 @@ function MeetingRoom() {
                 "chatRowIn 0.35s ease",
             }}
           >
-            {/* 프로필 */}
+            {/* 프로필
+
+                ★ AI/본인이 아닌 다른 참여자면 누를 수 있게 해서
+                그 사람 프로필(OtherProfile.js)로 이동
+            */}
 
             {msg.type !== "me" && (
               <div
                 className="chat-profile"
+                onClick={() =>
+                  msg.type === "other" &&
+                  navigate("/other-profile", {
+                    state: {
+                      userId: msg.memberId,
+                      nickname: msg.user,
+                    },
+                  })
+                }
                 style={{
                   background:
                     msg.type === "ai"
                       ? "#9bd44e"
                       : "#87CEEB",
+                  cursor:
+                    msg.type === "other"
+                      ? "pointer"
+                      : "default",
                 }}
               >
                 {msg.user?.[0]}
@@ -493,7 +579,24 @@ function MeetingRoom() {
 
             <div className="chat-content">
               {msg.type !== "me" && (
-                <div className="chat-name">
+                <div
+                  className="chat-name"
+                  onClick={() =>
+                    msg.type === "other" &&
+                    navigate("/other-profile", {
+                      state: {
+                        userId: msg.memberId,
+                        nickname: msg.user,
+                      },
+                    })
+                  }
+                  style={{
+                    cursor:
+                      msg.type === "other"
+                        ? "pointer"
+                        : "default",
+                  }}
+                >
                   {msg.user}
                 </div>
               )}
@@ -526,10 +629,11 @@ function MeetingRoom() {
 
       {!roleLoading && isHost && (
         <div
+          ref={aiBarRef}
           style={{
             position: "fixed",
 
-            bottom: "146px",
+            bottom: `${aiBarBottom}px`,
 
             left: 0,
             right: 0,
@@ -621,10 +725,11 @@ function MeetingRoom() {
 
       {sendError && (
         <div
+          ref={sendErrorRef}
           style={{
             position: "fixed",
 
-            bottom: isHost && !roleLoading ? "190px" : "130px",
+            bottom: `${sendErrorBottom}px`,
 
             left: 0,
             right: 0,
@@ -659,7 +764,7 @@ function MeetingRoom() {
           (position: fixed; bottom: 72px)
       ================================================== */}
 
-      <div className="meeting-input-wrap">
+      <div className="meeting-input-wrap" ref={inputWrapRef}>
         <input
           value={input}
           onChange={(e) =>
