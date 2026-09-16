@@ -3,12 +3,6 @@
 import { useState, useEffect } from "react";
 
 import {
-  FiBell,
-  FiSearch,
-  FiPlus,
-} from "react-icons/fi";
-
-import {
   Swiper,
   SwiperSlide,
 } from "swiper/react";
@@ -121,16 +115,6 @@ function Home() {
       <div className="top-bar">
         <div className="logo">
           READLY
-        </div>
-
-        <div className="icon-group">
-          <FiPlus />
-          <FiSearch />
-
-          <div className="bell-wrap">
-            <FiBell />
-            <div className="bell-dot"></div>
-          </div>
         </div>
       </div>
 

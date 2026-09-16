@@ -1,7 +1,6 @@
 // src/pages/Profile.js
 
 import { useState, useRef, useEffect } from "react";
-import { FiSettings } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -9,6 +8,7 @@ import {
   getMyProfile,
   getFollowers,
   getFollowings,
+  unfollow,
   getMyBookList,
   updateMyProfile,
 } from "../api/api";
@@ -55,8 +55,17 @@ function Profile() {
 
   const [listModal, setListModal] = useState(null); // "followers" | "followings" | null
 
+  // ★ 모달 안에서 이름으로 검색 (서버 검색 API가 없어서 이미 받아온
+  // 목록을 프론트에서 필터링)
+  const [listSearch, setListSearch] = useState("");
+
+  // ★ 팔로잉 목록에서 바로 언팔로우 — 행마다 눌렀을 때만 로딩 표시
+  const [unfollowLoadingId, setUnfollowLoadingId] =
+    useState(null);
+
   const openListModal = async (type) => {
     setListModal(type);
+    setListSearch("");
     setListLoading(true);
 
     try {
@@ -74,6 +83,45 @@ function Profile() {
       console.error("팔로워/팔로잉 목록 조회 오류:", err);
     } finally {
       setListLoading(false);
+    }
+  };
+
+  const handleUnfollowFromModal = async (
+    e,
+    targetMemberId
+  ) => {
+    e.stopPropagation(); // 행 클릭(프로필 이동)으로 안 번지게
+
+    if (unfollowLoadingId) {
+      return;
+    }
+
+    setUnfollowLoadingId(targetMemberId);
+
+    try {
+      await unfollow(targetMemberId);
+
+      setFollowingList((prev) =>
+        prev.filter(
+          (p) => p.memberId !== targetMemberId
+        )
+      );
+
+      setProfile((prev) => ({
+        ...prev,
+        following: Math.max(
+          0,
+          prev.following - 1
+        ),
+      }));
+    } catch (err) {
+      console.error("언팔로우 오류:", err);
+      alert(
+        err.message ||
+          "언팔로우 중 오류가 발생했습니다."
+      );
+    } finally {
+      setUnfollowLoadingId(null);
     }
   };
 
@@ -249,6 +297,22 @@ function Profile() {
     setSaveError("");
     setShowModal(true);
   };
+
+  // ★ 모달에 보여줄 목록 — 팔로워/팔로잉 원본에서 검색어로 필터링
+  const currentModalList =
+    (listModal === "followers"
+      ? followerList
+      : followingList) || [];
+
+  const filteredModalList = listSearch.trim()
+    ? currentModalList.filter((p) =>
+        (p.nickname || "")
+          .toLowerCase()
+          .includes(
+            listSearch.trim().toLowerCase()
+          )
+      )
+    : currentModalList;
 
   return (
     <>
@@ -483,7 +547,6 @@ function Profile() {
         {/* 상단 헤더 */}
         <div className="profile-header">
           <div className="logo">READLY</div>
-          <FiSettings className="setting-icon" />
         </div>
 
         {/* 로딩 / 에러 */}
@@ -674,6 +737,26 @@ function Profile() {
               {listModal === "followers" ? "팔로워" : "팔로잉"}
             </div>
 
+            {/* 이름으로 검색 (프론트에서 필터링) */}
+
+            <input
+              value={listSearch}
+              onChange={(e) =>
+                setListSearch(e.target.value)
+              }
+              placeholder="닉네임으로 검색"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "9px 12px",
+                marginBottom: "10px",
+                border: "1px solid #eee",
+                borderRadius: "10px",
+                fontSize: "13px",
+                background: "#fafafa",
+              }}
+            />
+
             {listLoading && (
               <div
                 style={{
@@ -688,10 +771,22 @@ function Profile() {
             )}
 
             {!listLoading &&
-              (listModal === "followers"
-              ? followerList
-              : followingList
-            ).length === 0 && (
+              currentModalList.length > 0 &&
+              filteredModalList.length === 0 && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    fontSize: "13px",
+                    color: "#888",
+                    padding: "20px 0",
+                  }}
+                >
+                  검색 결과가 없어요.
+                </div>
+              )}
+
+            {!listLoading &&
+              currentModalList.length === 0 && (
               <div
                 style={{
                   textAlign: "center",
@@ -707,10 +802,7 @@ function Profile() {
             )}
 
             <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
-              {(listModal === "followers"
-                ? followerList
-                : followingList
-              ).map((person) => (
+              {filteredModalList.map((person) => (
                 <div
                   key={person.memberId}
                   style={{
@@ -740,7 +832,7 @@ function Profile() {
                       flexShrink: 0,
                     }}
                   />
-                  <div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: "14px", fontWeight: "700" }}>
                       {person.nickname}
                     </div>
@@ -748,6 +840,45 @@ function Profile() {
                       {person.introduction}
                     </div>
                   </div>
+
+                  {/* ★ 팔로잉 목록에서만 언팔로우 가능
+                      (팔로워는 내가 그 사람을 팔로우하는 게 아니라서
+                      "취소"할 대상 자체가 없음 — 삭제 API도 따로 없음) */}
+                  {listModal === "followings" && (
+                    <button
+                      type="button"
+                      onClick={(e) =>
+                        handleUnfollowFromModal(
+                          e,
+                          person.memberId
+                        )
+                      }
+                      disabled={
+                        unfollowLoadingId ===
+                        person.memberId
+                      }
+                      style={{
+                        flexShrink: 0,
+                        border: "1px solid #ddd",
+                        borderRadius: "16px",
+                        padding: "5px 12px",
+                        background: "#fff",
+                        color: "#888",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        cursor:
+                          unfollowLoadingId ===
+                          person.memberId
+                            ? "default"
+                            : "pointer",
+                      }}
+                    >
+                      {unfollowLoadingId ===
+                      person.memberId
+                        ? "..."
+                        : "언팔로우"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
