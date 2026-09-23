@@ -734,7 +734,7 @@ function Community() {
 
                 {!newMeeting.date && (
                   <span className="date-time-placeholder">
-                    년-월-일
+                    
                   </span>
                 )}
               </div>
@@ -758,7 +758,7 @@ function Community() {
 
                 {!newMeeting.time && (
                   <span className="date-time-placeholder">
-                    --:--
+                    
                   </span>
                 )}
               </div>
