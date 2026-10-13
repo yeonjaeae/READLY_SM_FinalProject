@@ -90,7 +90,7 @@ function Signup() {
 
         <input
           className="auth-input"
-          placeholder="아이디 (로그인용)"
+          placeholder="닉네임"
           value={loginId}
           onChange={(e) =>
             setLoginId(e.target.value)
